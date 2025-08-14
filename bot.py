@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# States untuk ConversationHandler
+# Conversation states
 SELECT_REPORT_TYPE, INPUT_ID, INPUT_DATA, CONFIRM_DATA, UPLOAD_PHOTO, INPUT_PHOTO_DESC = range(6)
 
 class TelegramBot:
@@ -43,23 +43,12 @@ class TelegramBot:
         # Authenticate Google
         if not self.google_service.authenticate():
             raise Exception("Failed to authenticate Google APIs")
-        self.application = None
-
-    def delete_folder_if_exists(self, user_id):
-        """Delete folder if session exists"""
-        session = self.session_service.get_session(user_id)
-        if session and session.get('folder_id'):
-            try:
-                self.google_service.service_drive.files().delete(fileId=session['folder_id']).execute()
-                logger.info(f"Folder deleted for user {user_id}")
-            except Exception as e:
-                logger.error(f"Error deleting folder: {e}")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start command handler"""
         user_id = update.effective_user.id
         
-        # Clear previous data
+        # Clear previous session
         context.user_data.clear()
         context.user_data['report_type'] = None
         context.user_data['id_ticket'] = None
@@ -85,12 +74,8 @@ class TelegramBot:
         user_id = update.effective_user.id
         message_text = update.message.text.strip()
         
-        logger.info(f"User {user_id} input: '{message_text}'")
-        
-        # Handle normal report type selection
         valid_types = ['Non B2B', 'BGES', 'Squad']
         if message_text not in valid_types:
-            logger.warning(f"Invalid input from user {user_id}: '{message_text}'")
             keyboard = [
                 [KeyboardButton("Non B2B"), KeyboardButton("BGES")],
                 [KeyboardButton("Squad")]
@@ -102,11 +87,8 @@ class TelegramBot:
             )
             return SELECT_REPORT_TYPE
         
-        # Save report type
         context.user_data['report_type'] = message_text
-        logger.info(f"Report type saved: {message_text}")
         
-        # Move to INPUT_ID with new keyboard
         cancel_keyboard = ReplyKeyboardMarkup(
             [[KeyboardButton("❌ Batalkan")]], 
             resize_keyboard=True, 
@@ -126,26 +108,13 @@ class TelegramBot:
         ticket_id = update.message.text.strip()
         
         if ticket_id == "❌ Batalkan":
-            # Cleanup from context.user_data
-            if context.user_data.get('folder_id'):
-                try:
-                    self.google_service.service_drive.files().delete(fileId=context.user_data['folder_id']).execute()
-                    logger.info(f"Folder deleted for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting folder: {e}")
-            
-            context.user_data.clear()
-            await update.message.reply_text(
-                "Laporan dibatalkan.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
-            )
+            await self.cancel_report(update, context)
             return ConversationHandler.END
         
         if not ticket_id:
             await update.message.reply_text("ID Ticket tidak boleh kosong. Silakan masukkan ID Ticket:")
             return INPUT_ID
         
-        # Update context.user_data
         context.user_data['id_ticket'] = ticket_id
         
         # Create folder in Google Drive
@@ -158,7 +127,7 @@ class TelegramBot:
         
         context.user_data['folder_id'] = folder_id
         
-        # Send input format
+        # Send report format
         folder_link = self.google_service.get_folder_link(folder_id)
         report_format = (
             f"📋 Format Berhasil Dibuat\n\n"
@@ -188,34 +157,15 @@ class TelegramBot:
         message_text = update.message.text
         
         if message_text == "❌ Batalkan":
-            # Cleanup from context.user_data
-            if context.user_data.get('folder_id'):
-                try:
-                    self.google_service.service_drive.files().delete(fileId=context.user_data['folder_id']).execute()
-                    logger.info(f"Folder deleted for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting folder: {e}")
-            
-            context.user_data.clear()
-            await update.message.reply_text(
-                "Laporan dibatalkan.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
-            )
+            await self.cancel_report(update, context)
             return ConversationHandler.END
         
         # Parse data from format
         data = {}
         lines = message_text.split('\n')
+        start_idx = next((i for i, line in enumerate(lines) if "Salin Format Laporan" in line else len(lines))
         
-        # Find section after "Salin Format Laporan dan isi dibawah ini :"
-        # FIXED: Corrected the syntax error here
-        start_idx = 0
-        for i, line in enumerate(lines):
-            if "Salin Format Laporan" in line:
-                start_idx = i + 1
-                break
-        
-        for line in lines[start_idx:]:
+        for line in lines[start_idx+1:]:
             if ':' in line:
                 key, value = line.split(':', 1)
                 data[key.strip()] = value.strip()
@@ -231,7 +181,7 @@ class TelegramBot:
             )
             return INPUT_DATA
         
-        # Save data to context.user_data
+        # Prepare report data
         report_data = {
             'report_type': context.user_data['report_type'],
             'id_ticket': context.user_data['id_ticket'],
@@ -250,13 +200,10 @@ class TelegramBot:
         
         # Show confirmation with photo info
         photos = context.user_data.get('photos', [])
-        photo_info = ""
-        if photos:
-            photo_info = f"\n📷 Foto Terupload: {len(photos)} foto\n"
-            for i, photo in enumerate(photos, 1):
-                photo_info += f"   {i}. {photo['name']}\n"
-        else:
-            photo_info = "\n📷 Foto Eviden: Belum ada foto terupload\n"
+        photo_info = f"\n📷 Foto Terupload: {len(photos)} foto\n" if photos else "\n📷 Foto Eviden: Belum ada foto terupload\n"
+        
+        for i, photo in enumerate(photos, 1):
+            photo_info += f"   {i}. {photo['name']}\n"
         
         confirmation_text = (
             f"📋 Konfirmasi Data Laporan\n\n"
@@ -288,7 +235,6 @@ class TelegramBot:
         choice = update.message.text
         
         if choice == "✅ Kirim Laporan":
-            # Send to spreadsheet
             success = self.google_service.update_spreadsheet(
                 self.spreadsheet_id,
                 self.spreadsheet_config,
@@ -316,7 +262,6 @@ class TelegramBot:
             return ConversationHandler.END
             
         elif choice == "📝 Edit Data":
-            # Resend format for editing
             report_format = (
                 f"📝 Edit Data Laporan\n\n"
                 f"Report Type : {context.user_data['data']['report_type']}\n"
@@ -355,19 +300,7 @@ class TelegramBot:
             return UPLOAD_PHOTO
             
         elif choice == "❌ Batalkan":
-            # Cleanup from context.user_data
-            if context.user_data.get('folder_id'):
-                try:
-                    self.google_service.service_drive.files().delete(fileId=context.user_data['folder_id']).execute()
-                    logger.info(f"Folder deleted for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting folder: {e}")
-                    
-            context.user_data.clear()
-            await update.message.reply_text(
-                "Laporan dibatalkan.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
-            )
+            await self.cancel_report(update, context)
             return ConversationHandler.END
 
     async def upload_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,7 +308,6 @@ class TelegramBot:
         user_id = update.effective_user.id
         message_text = update.message.text
         
-        # Handle upload method selection
         if message_text == "📸 Upload Satu-Satu (Custom Nama)":
             context.user_data['upload_mode'] = 'single'
             await update.message.reply_text(
@@ -404,15 +336,12 @@ class TelegramBot:
             if 'upload_mode' in context.user_data:
                 del context.user_data['upload_mode']
             
-            # Return to data confirmation with updated photo info
+            # Return to confirmation with updated photo info
             photos = context.user_data.get('photos', [])
-            photo_info = ""
-            if photos:
-                photo_info = f"\n📷 Foto Terupload: {len(photos)} foto\n"
-                for i, photo in enumerate(photos, 1):
-                    photo_info += f"   {i}. {photo['name']}\n"
-            else:
-                photo_info = "\n📷 Foto Eviden: Belum ada foto terupload\n"
+            photo_info = f"\n📷 Foto Terupload: {len(photos)} foto\n" if photos else "\n📷 Foto Eviden: Belum ada foto terupload\n"
+            
+            for i, photo in enumerate(photos, 1):
+                photo_info += f"   {i}. {photo['name']}\n"
             
             confirmation_text = (
                 f"📋 Konfirmasi Data Laporan\n\n"
@@ -439,21 +368,7 @@ class TelegramBot:
             return CONFIRM_DATA
         
         elif message_text == "❌ Batalkan":
-            if 'upload_mode' in context.user_data:
-                del context.user_data['upload_mode']
-                
-            if context.user_data.get('folder_id'):
-                try:
-                    self.google_service.service_drive.files().delete(fileId=context.user_data['folder_id']).execute()
-                    logger.info(f"Folder deleted for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Error deleting folder: {e}")
-                    
-            context.user_data.clear()
-            await update.message.reply_text(
-                "Laporan dibatalkan.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
-            )
+            await self.cancel_report(update, context)
             return ConversationHandler.END
         
         # Handle photo message
@@ -511,32 +426,19 @@ class TelegramBot:
                             f"Kirim foto lain atau ketik 'Selesai Upload'."
                         )
                     else:
-                        await update.message.reply_text(
-                            "❌ Gagal mengupload foto. Silakan coba lagi."
-                        )
+                        await update.message.reply_text("❌ Gagal mengupload foto. Silakan coba lagi.")
                         
                 except Exception as e:
                     logger.error(f"Error uploading photo: {e}")
-                    await update.message.reply_text(
-                        "❌ Terjadi kesalahan saat mengupload foto. Silakan coba lagi."
-                    )
+                    await update.message.reply_text("❌ Terjadi kesalahan saat mengupload foto. Silakan coba lagi.")
                 
                 return UPLOAD_PHOTO
         else:
-            if 'upload_mode' not in context.user_data:
-                await update.message.reply_text(
-                    "Silakan pilih metode upload terlebih dahulu."
-                )
-                return UPLOAD_PHOTO
-            else:
-                await update.message.reply_text(
-                    "Silakan kirim foto atau pilih 'Selesai Upload' jika sudah selesai."
-                )
-                return UPLOAD_PHOTO
+            await update.message.reply_text("Silakan kirim foto atau pilih 'Selesai Upload' jika sudah selesai.")
+            return UPLOAD_PHOTO
 
     async def input_photo_desc(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle photo description input"""
-        user_id = update.effective_user.id
         description = update.message.text.strip()
         
         if description == "❌ Batalkan":
@@ -614,74 +516,64 @@ class TelegramBot:
         
         return UPLOAD_PHOTO
 
+    async def cancel_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Cancel report and clean up"""
+        user_id = update.effective_user.id
+        if context.user_data.get('folder_id'):
+            try:
+                self.google_service.service_drive.files().delete(fileId=context.user_data['folder_id']).execute()
+                logger.info(f"Folder deleted for user {user_id}")
+            except Exception as e:
+                logger.error(f"Error deleting folder: {e}")
+        
+        context.user_data.clear()
+        await update.message.reply_text(
+            "Laporan dibatalkan.",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
+        )
+
     def create_application(self):
         """Create telegram application"""
-        if not self.application:
-            self.application = Application.builder().token(self.token).build()
-            
-            # Conversation handler
-            conv_handler = ConversationHandler(
-                entry_points=[CommandHandler('start', self.start)],
-                states={
-                    SELECT_REPORT_TYPE: [
-                        MessageHandler(
-                            filters.TEXT & ~filters.COMMAND,
-                            self.select_report_type
-                        )
-                    ],
-                    INPUT_ID: [
-                        MessageHandler(
-                            filters.TEXT & ~filters.COMMAND,
-                            self.input_id
-                        )
-                    ],
-                    INPUT_DATA: [
-                        MessageHandler(
-                            filters.TEXT & ~filters.COMMAND,
-                            self.input_data
-                        )
-                    ],
-                    CONFIRM_DATA: [
-                        MessageHandler(
-                            filters.TEXT & ~filters.COMMAND,
-                            self.confirm_data
-                        )
-                    ],
-                    UPLOAD_PHOTO: [
-                        MessageHandler(
-                            filters.TEXT & ~filters.COMMAND,
-                            self.upload_photo
-                        ),
-                        MessageHandler(
-                            filters.PHOTO,
-                            self.upload_photo
-                        )
-                    ],
-                    INPUT_PHOTO_DESC: [
-                        MessageHandler(
-                            filters.TEXT & ~filters.COMMAND,
-                            self.input_photo_desc
-                        )
-                    ]
-                },
-                fallbacks=[CommandHandler('start', self.start)],
-                allow_reentry=True
-            )
-            
-            # Add handlers
-            self.application.add_handler(conv_handler)
+        application = Application.builder().token(self.token).build()
         
-        return self.application
+        # Conversation handler
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', self.start)],
+            states={
+                SELECT_REPORT_TYPE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.select_report_type)
+                ],
+                INPUT_ID: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.input_id)
+                ],
+                INPUT_DATA: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.input_data)
+                ],
+                CONFIRM_DATA: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.confirm_data)
+                ],
+                UPLOAD_PHOTO: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.upload_photo),
+                    MessageHandler(filters.PHOTO, self.upload_photo)
+                ],
+                INPUT_PHOTO_DESC: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.input_photo_desc)
+                ]
+            },
+            fallbacks=[CommandHandler('start', self.start)],
+            allow_reentry=True
+        )
+        
+        application.add_handler(conv_handler)
+        return application
 
-# Flask app untuk webhook Railway
+# Flask app for webhook
 app = Flask(__name__)
-
-# Global bot instance with proper initialization
 bot_instance = None
 application_instance = None
 
-def initialize_bot():
-    """Initialize bot instance"""
+def get_bot_application():
+    """Get or create bot and application instances"""
     global bot_instance, application_instance
     
     if bot_instance is None:
@@ -694,15 +586,6 @@ def initialize_bot():
         bot_instance = TelegramBot(BOT_TOKEN, SPREADSHEET_ID)
         application_instance = bot_instance.create_application()
         
-        # Initialize application
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(application_instance.initialize())
-            loop.run_until_complete(application_instance.start())
-        finally:
-            loop.close()
-    
     return application_instance
 
 @app.route('/')
@@ -720,8 +603,7 @@ def debug():
         return {
             "bot_token": "SET" if bot_token else "NOT SET",
             "spreadsheet_id": "SET" if spreadsheet_id else "NOT SET", 
-            "google_credentials": "SET" if google_creds else "NOT SET",
-            "google_creds_length": len(google_creds) if google_creds else 0
+            "google_credentials": "SET" if google_creds else "NOT SET"
         }
     except Exception as e:
         return {"error": str(e)}
@@ -730,33 +612,29 @@ def debug():
 def webhook():
     """Webhook endpoint for Telegram"""
     try:
-        application = initialize_bot()
-        
-        # Process update
+        application = get_bot_application()
         update_data = request.get_json()
-        logger.info(f"Received update: {update_data}")
         
         if update_data:
-            logger.info(f"Processing update: {update_data}")
             update = Update.de_json(update_data, application.bot)
             
-            # Use existing event loop if possible
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
             try:
-                loop.run_until_complete(application.process_update(update))
-            except Exception as e:
-                logger.error(f"Error processing update: {e}")
-                return "Error processing update", 500
+                async def process():
+                    if not application.running:
+                        await application.initialize()
+                        await application.start()
+                    await application.process_update(update)
+                
+                loop.run_until_complete(process())
             finally:
                 loop.close()
         
         return "OK", 200
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
         return "Error", 500
 
 @app.route('/set_webhook', methods=['GET'])
@@ -764,19 +642,11 @@ def set_webhook():
     """Set webhook URL"""
     try:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
-        
         if not BOT_TOKEN:
             return {"error": "BOT_TOKEN not found"}, 500
         
-        # Get Railway URL from environment or use default
-        railway_url = os.getenv('RAILWAY_STATIC_URL') or os.getenv('RAILWAY_PUBLIC_DOMAIN')
-        
-        if not railway_url:
-            # Try to construct from request
-            railway_url = request.url_root.rstrip('/')
-        
+        railway_url = os.getenv('RAILWAY_STATIC_URL') or os.getenv('RAILWAY_PUBLIC_DOMAIN') or request.url_root.rstrip('/')
         webhook_url = f"{railway_url}/webhook"
-        logger.info(f"Setting webhook to: {webhook_url}")
         
         import requests
         response = requests.post(
@@ -784,14 +654,11 @@ def set_webhook():
             json={"url": webhook_url}
         )
         
-        result = response.json()
-        logger.info(f"Webhook response: {result}")
-        return result
+        return response.json()
     except Exception as e:
         logger.error(f"Error setting webhook: {e}")
         return {"error": str(e)}, 500
 
 if __name__ == "__main__":
-    # Untuk development lokal
     port = int(os.getenv("PORT", 8000))
     app.run(host="0.0.0.0", port=port, debug=False)

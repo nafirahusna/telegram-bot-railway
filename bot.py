@@ -208,9 +208,14 @@ class TelegramBot:
         lines = message_text.split('\n')
         
         # Find section after "Salin Format Laporan dan isi dibawah ini :"
-        start_idx = next((i for i, line in enumerate(lines) if "Salin Format Laporan" in line else len(lines))
+        # FIXED: Corrected the syntax error here
+        start_idx = 0
+        for i, line in enumerate(lines):
+            if "Salin Format Laporan" in line:
+                start_idx = i + 1
+                break
         
-        for line in lines[start_idx+1:]:
+        for line in lines[start_idx:]:
             if ':' in line:
                 key, value = line.split(':', 1)
                 data[key.strip()] = value.strip()

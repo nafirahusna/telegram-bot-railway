@@ -28,3 +28,64 @@ class GoogleService:
         except Exception as e:
             print(f"✖ Error authenticating with service account: {e}")
             return False
+
+    def create_folder(self, folder_name, parent_folder_id=None):
+        """Create folder in Google Drive"""
+        try:
+            folder_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            if parent_folder_id or self.parent_folder_id:
+                folder_metadata['parents'] = [parent_folder_id or self.parent_folder_id]
+            
+            folder = self.service_drive.files().create(body=folder_metadata).execute()
+            print(f"Ã¢Å“â€¦ Folder created: {folder_name}")
+            return folder.get('id')
+        except Exception as e:
+            print(f"Ã¢ÂÅ’ Error creating folder: {e}")
+            return None
+
+    def upload_to_drive(self, file_path, file_name, folder_id):
+        """Upload file to Google Drive"""
+        try:
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            media = MediaFileUpload(file_path, resumable=True)
+            uploaded_file = self.service_drive.files().create(
+                body=file_metadata, 
+                media_body=media
+            ).execute()
+            print(f"Ã¢Å“â€¦ File uploaded: {file_name}")
+            return uploaded_file.get('id')
+        except Exception as e:
+            print(f"Ã¢ÂÅ’ Error uploading file: {e}")
+            return None
+
+    def get_folder_link(self, folder_id):
+        """Get shareable link for Google Drive folder"""
+        return f"https://drive.google.com/drive/folders/{folder_id}"
+
+    def update_spreadsheet(self, spreadsheet_id, spreadsheet_config, laporan_data):
+        """Update Google Spreadsheet with report data"""
+        try:
+            row_data = spreadsheet_config.prepare_row_data(laporan_data, 0)
+            
+            body = {'values': [row_data]}
+            
+            result = self.service_sheets.spreadsheets().values().append(
+                spreadsheetId=spreadsheet_id,
+                range=spreadsheet_config.get_append_range(),
+                valueInputOption='RAW',
+                body=body
+            ).execute()
+            
+            print(f"Ã¢Å“â€¦ Successfully added row to spreadsheet")
+            print(f"Row data: {row_data}")  # Debug print
+            return True
+            
+        except Exception as e:
+            print(f"Ã¢ÂÅ’ Error updating spreadsheet: {e}")
+            return False

@@ -6,7 +6,6 @@ from google.oauth2 import service_account
 from googleapiclient.http import MediaFileUpload
 from datetime import datetime
 
-# Scopes untuk Google API
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
 class GoogleService:
@@ -18,24 +17,19 @@ class GoogleService:
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
         try:
-            # DIPERBAIKI: Coba ambil dari environment variable dulu
             service_account_info = None
             
-            # Coba ambil dari GOOGLE_CREDENTIALS environment variable (base64 encoded)
             if os.getenv('GOOGLE_CREDENTIALS_BASE64'):
                 try:
                     encoded_creds = os.getenv('GOOGLE_CREDENTIALS_BASE64')
                     decoded_creds = base64.b64decode(encoded_creds).decode('utf-8')
                     service_account_info = json.loads(decoded_creds)
-                    print("Using credentials from GOOGLE_CREDENTIALS_BASE64 environment variable")
                 except Exception as e:
                     print(f"Error decoding base64 credentials: {e}")
             
-            # Fallback ke file JSON
             elif os.path.exists('service-account.json'):
                 with open('service-account.json', 'r') as f:
                     service_account_info = json.load(f)
-                print("Using credentials from service-account.json file")
             
             else:
                 raise FileNotFoundError("No service account credentials found")
@@ -50,7 +44,6 @@ class GoogleService:
             
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)
-            print("Google APIs authenticated successfully!")
             return True
             
         except Exception as e:
@@ -62,13 +55,11 @@ class GoogleService:
         try:
             folder_metadata = {
                 'name': folder_name,
-                'mimeType': 'application/vnd.google-apps.folder'
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_folder_id or self.parent_folder_id]
             }
-            if parent_folder_id or self.parent_folder_id:
-                folder_metadata['parents'] = [parent_folder_id or self.parent_folder_id]
             
             folder = self.service_drive.files().create(body=folder_metadata).execute()
-            print(f"Folder created: {folder_name}")
             return folder.get('id')
         except Exception as e:
             print(f"Error creating folder: {e}")
@@ -86,7 +77,6 @@ class GoogleService:
                 body=file_metadata, 
                 media_body=media
             ).execute()
-            print(f"File uploaded: {file_name}")
             return uploaded_file.get('id')
         except Exception as e:
             print(f"Error uploading file: {e}")
@@ -110,8 +100,6 @@ class GoogleService:
                 body=body
             ).execute()
             
-            print(f"Successfully added row to spreadsheet")
-            print(f"Row data: {row_data}")  # Debug print
             return True
             
         except Exception as e:

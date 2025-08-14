@@ -1,5 +1,7 @@
 import os
 import re
+import asyncio
+import logging
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
@@ -7,15 +9,12 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    ConversationHandler,
-    PicklePersistence  # DITAMBAH: Untuk persistence
+    ConversationHandler
 )
 from datetime import datetime
 from flask import Flask, request
-import asyncio
-import logging
 
-# Import services - DIPERBAIKI: Sesuaikan dengan struktur folder
+# Import services
 from services.google_service import GoogleService
 from services.session_service import SessionService
 from config.spreadsheet_config import SpreadsheetConfig
@@ -58,8 +57,8 @@ class TelegramBot:
         """Start command handler"""
         user_id = update.effective_user.id
         
-        # DIPERBAIKI: Simpan data di context.user_data alih-alih session service
-        context.user_data.clear()  # Clear previous data
+        # DIPERBAIKI: Gunakan context.user_data untuk persistence
+        context.user_data.clear()
         context.user_data['report_type'] = None
         context.user_data['id_ticket'] = None
         context.user_data['folder_id'] = None
@@ -90,7 +89,7 @@ class TelegramBot:
             await update.message.reply_text("Pilihan tidak valid. Silakan pilih jenis laporan yang tersedia.")
             return SELECT_REPORT_TYPE
         
-        # DIPERBAIKI: Update context.user_data instead of session
+        # DIPERBAIKI: Update context.user_data
         context.user_data['report_type'] = message_text
         
         await update.message.reply_text(
@@ -315,11 +314,11 @@ class TelegramBot:
             
         elif choice == "📷 Upload Foto Eviden":
             await update.message.reply_text(
-                "📷 **Upload Foto Eviden**\n\n"
-                "⚠️ **PENTING - Cara Upload Foto:**\n"
-                "• **Satu foto**: Kirim 1 foto → input deskripsi custom\n"
-                "• **Beberapa foto sekaligus**: Deskripsi akan otomatis random (foto_1, foto_2, dst)\n\n"
-                "📋 **Pilih metode upload:**",
+                "📷 Upload Foto Eviden\n\n"
+                "⚠️ PENTING - Cara Upload Foto:\n"
+                "• Satu foto: Kirim 1 foto → input deskripsi custom\n"
+                "• Beberapa foto sekaligus: Deskripsi akan otomatis random (foto_1, foto_2, dst)\n\n"
+                "📋 Pilih metode upload:",
                 reply_markup=ReplyKeyboardMarkup([
                     [KeyboardButton("📸 Upload Satu-Satu (Custom Nama)")],
                     [KeyboardButton("📷 Upload Banyak (Auto Nama)")],
@@ -351,10 +350,9 @@ class TelegramBot:
         
         # Handle pilihan metode upload
         if message_text == "📸 Upload Satu-Satu (Custom Nama)":
-            # Set mode upload satu-satu
             context.user_data['upload_mode'] = 'single'
             await update.message.reply_text(
-                "📸 **Mode Upload Satu-Satu**\n\n"
+                "📸 Mode Upload Satu-Satu\n\n"
                 "Kirimkan foto satu per satu. Setiap foto akan diminta deskripsi custom.\n\n"
                 "Kirimkan foto pertama:",
                 reply_markup=ReplyKeyboardMarkup([
@@ -364,10 +362,9 @@ class TelegramBot:
             return UPLOAD_PHOTO
             
         elif message_text == "📷 Upload Banyak (Auto Nama)":
-            # Set mode upload banyak
             context.user_data['upload_mode'] = 'multiple'
             await update.message.reply_text(
-                "📷 **Mode Upload Banyak**\n\n"
+                "📷 Mode Upload Banyak\n\n"
                 "Kirimkan beberapa foto sekaligus. Nama file akan otomatis: foto_1, foto_2, dst.\n\n"
                 "Kirimkan foto-foto Anda:",
                 reply_markup=ReplyKeyboardMarkup([
@@ -377,7 +374,6 @@ class TelegramBot:
             return UPLOAD_PHOTO
         
         if message_text == "Selesai Upload":
-            # Reset upload mode
             if 'upload_mode' in context.user_data:
                 del context.user_data['upload_mode']
             
@@ -416,11 +412,9 @@ class TelegramBot:
             return CONFIRM_DATA
         
         elif message_text == "❌ Batalkan":
-            # Reset upload mode
             if 'upload_mode' in context.user_data:
                 del context.user_data['upload_mode']
                 
-            # DIPERBAIKI: Cleanup dari context.user_data
             if context.user_data.get('folder_id'):
                 try:
                     self.google_service.service_drive.files().delete(fileId=context.user_data['folder_id']).execute()
@@ -440,7 +434,6 @@ class TelegramBot:
             upload_mode = context.user_data.get('upload_mode', 'single')
             
             if upload_mode == 'single':
-                # Mode upload satu-satu - minta deskripsi
                 photo = update.message.photo[-1]
                 context.user_data['temp_photo'] = photo
                 
@@ -454,7 +447,6 @@ class TelegramBot:
                 return INPUT_PHOTO_DESC
             
             elif upload_mode == 'multiple':
-                # Mode upload banyak - langsung proses dengan nama auto
                 if not context.user_data.get('folder_id'):
                     await update.message.reply_text(
                         "❌ Session tidak valid. Silakan mulai ulang.",
@@ -466,7 +458,6 @@ class TelegramBot:
                 try:
                     file = await context.bot.get_file(photo.file_id)
                     
-                    # Generate nama otomatis
                     photos = context.user_data.get('photos', [])
                     photo_count = len(photos) + 1
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -481,7 +472,6 @@ class TelegramBot:
                         os.remove(filepath)
                     
                     if file_id:
-                        # Tambahkan ke daftar foto
                         photos.append({
                             'id': file_id,
                             'name': filename
@@ -506,7 +496,6 @@ class TelegramBot:
                 
                 return UPLOAD_PHOTO
         else:
-            # Belum pilih mode upload
             if 'upload_mode' not in context.user_data:
                 await update.message.reply_text(
                     "Silakan pilih metode upload terlebih dahulu."
@@ -524,9 +513,8 @@ class TelegramBot:
         description = update.message.text.strip()
         
         if description == "❌ Batalkan":
-            # Kembali ke upload photo mode single
             await update.message.reply_text(
-                "📸 **Mode Upload Satu-Satu**\n\n"
+                "📸 Mode Upload Satu-Satu\n\n"
                 "Kirimkan foto satu per satu. Setiap foto akan diminta deskripsi custom.\n\n"
                 "Kirimkan foto:",
                 reply_markup=ReplyKeyboardMarkup([
@@ -562,7 +550,6 @@ class TelegramBot:
                     os.remove(filepath)
                 
                 if file_id:
-                    # Tambahkan ke daftar foto
                     photos = context.user_data.get('photos', [])
                     photos.append({
                         'id': file_id,
@@ -602,15 +589,9 @@ class TelegramBot:
 
     def create_application(self):
         """Create telegram application"""
-        # DIPERBAIKI: Tambahkan persistence
-        persistence = PicklePersistence(filepath='bot_persistence.pkl')
+        application = Application.builder().token(self.token).build()
         
-        application = Application.builder()\
-            .token(self.token)\
-            .persistence(persistence)\
-            .build()
-        
-        # Conversation handler - DIPERBAIKI: Tambahkan name dan persistent flag
+        # Conversation handler
         conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler('start', self.start)
@@ -658,25 +639,25 @@ class TelegramBot:
                 ]
             },
             fallbacks=[CommandHandler('start', self.start)],
-            allow_reentry=True,
-            name="report_conversation",  # DITAMBAH: Nama untuk persistence
-            persistent=True  # DITAMBAH: Enable persistence
+            allow_reentry=True
         )
         
         # Add handlers
         application.add_handler(conv_handler)
         return application
 
-# DIPERBAIKI: Flask app untuk webhook Railway
+# Flask app untuk webhook Railway
 app = Flask(__name__)
 
-# DIPERBAIKI: Global application instance yang persistent
-global_application = None
+# DIPERBAIKI: Sederhana tanpa global persistence yang kompleks
+bot_instance = None
+application_instance = None
 
-def get_application():
-    """Get or create global application instance"""
-    global global_application
-    if global_application is None:
+def get_bot_application():
+    """Get or create bot and application instances"""
+    global bot_instance, application_instance
+    
+    if bot_instance is None:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         SPREADSHEET_ID = os.getenv("SPREADSHEET_ID") 
         
@@ -684,12 +665,9 @@ def get_application():
             raise ValueError("BOT_TOKEN dan SPREADSHEET_ID harus diset!")
             
         bot_instance = TelegramBot(BOT_TOKEN, SPREADSHEET_ID)
-        global_application = bot_instance.create_application()
+        application_instance = bot_instance.create_application()
         
-        # DITAMBAH: Initialize application sekali saja
-        asyncio.create_task(global_application.initialize())
-        
-    return global_application
+    return application_instance
 
 @app.route('/')
 def index():
@@ -716,8 +694,7 @@ def debug():
 def webhook():
     """Webhook endpoint for Telegram"""
     try:
-        # DIPERBAIKI: Gunakan global application instance
-        application = get_application()
+        application = get_bot_application()
         
         # Process update
         update_data = request.get_json()
@@ -726,16 +703,23 @@ def webhook():
         if update_data:
             update = Update.de_json(update_data, application.bot)
             
-            # DIPERBAIKI: Proses update dengan application yang sudah initialized
+            # DIPERBAIKI: Proses update dengan event loop yang benar
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            async def process():
-                # Tidak perlu initialize/shutdown karena sudah global
-                await application.process_update(update)
-            
-            loop.run_until_complete(process())
-            loop.close()
+            try:
+                async def process():
+                    # Initialize application jika belum
+                    if not application.running:
+                        await application.initialize()
+                        await application.start()
+                    
+                    # Process update
+                    await application.process_update(update)
+                
+                loop.run_until_complete(process())
+            finally:
+                loop.close()
         
         return "OK", 200
     except Exception as e:
@@ -748,7 +732,6 @@ def webhook():
 def set_webhook():
     """Set webhook URL"""
     try:
-        # DIPERBAIKI: Ambil token dari environment variable langsung
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         
         if not BOT_TOKEN:

@@ -70,7 +70,7 @@ class TelegramBot:
             [KeyboardButton("Non B2B"), KeyboardButton("BGES")],
             [KeyboardButton("Squad")]
         ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         
         await update.message.reply_text(
             "Pilih Jenis Laporan:",
@@ -81,22 +81,42 @@ class TelegramBot:
     async def select_report_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle report type selection"""
         user_id = update.effective_user.id
-        message_text = update.message.text
+        message_text = update.message.text.strip()
+        
+        logger.info(f"User {user_id} input: '{message_text}'")
         
         # Handle normal report type selection
         valid_types = ['Non B2B', 'BGES', 'Squad']
         if message_text not in valid_types:
-            await update.message.reply_text("Pilihan tidak valid. Silakan pilih jenis laporan yang tersedia.")
+            logger.warning(f"Invalid input from user {user_id}: '{message_text}'")
+            keyboard = [
+                [KeyboardButton("Non B2B"), KeyboardButton("BGES")],
+                [KeyboardButton("Squad")]
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+            await update.message.reply_text(
+                "❌ Pilihan tidak valid!\n\nSilakan pilih salah satu jenis laporan:",
+                reply_markup=reply_markup
+            )
             return SELECT_REPORT_TYPE
         
-        # DIPERBAIKI: Update context.user_data
+        # Simpan report type
         context.user_data['report_type'] = message_text
+        logger.info(f"Report type saved: {message_text}")
+        
+        # Pindah ke INPUT_ID dengan keyboard baru
+        cancel_keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("❌ Batalkan")]], 
+            resize_keyboard=True, 
+            one_time_keyboard=True
+        )
         
         await update.message.reply_text(
-            "🎯 Masukkan ID Ticket:",
-            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ Batalkan")]], resize_keyboard=True)
+            f"✅ Jenis Laporan: {message_text}\n\n"
+            "🎯 Silakan masukkan ID Ticket:",
+            reply_markup=cancel_keyboard
         )
-        return INPUT_ID
+        return INPUT_ID  # PENTING: Return INPUT_ID bukan SELECT_REPORT_TYPE
 
     async def input_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle ID input"""

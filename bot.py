@@ -25,6 +25,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # States untuk ConversationHandler
 SELECT_REPORT_TYPE, INPUT_ID, INPUT_DATA, CONFIRM_DATA, UPLOAD_PHOTO, INPUT_PHOTO_DESC = range(6)
@@ -721,6 +722,7 @@ def webhook():
         logger.info(f"Received update: {update_data}")
         
         if update_data:
+            logger.info(f"Processing update: {update_data}")
             update = Update.de_json(update_data, application.bot)
             
             # DIPERBAIKI: Proses update dengan event loop yang benar

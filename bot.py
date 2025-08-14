@@ -654,13 +654,21 @@ def webhook():
         
         # Process update
         update_data = request.get_json()
+        logger.info(f"Received update: {update_data}")
+        
         if update_data:
             update = Update.de_json(update_data, application.bot)
-            asyncio.run(application.process_update(update))
+            # Use asyncio.create_task for better handling
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(application.process_update(update))
+            loop.close()
         
         return "OK", 200
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return "Error", 500
 
 @app.route('/set_webhook', methods=['GET'])
@@ -668,7 +676,15 @@ def set_webhook():
     """Set webhook URL"""
     try:
         bot = initialize_bot()
-        webhook_url = f"{os.getenv('RAILWAY_STATIC_URL', 'https://your-app.railway.app')}/webhook"
+        # Get Railway URL from environment or use default
+        railway_url = os.getenv('RAILWAY_STATIC_URL') or os.getenv('RAILWAY_PUBLIC_DOMAIN')
+        
+        if not railway_url:
+            # Try to construct from request
+            railway_url = request.url_root.rstrip('/')
+        
+        webhook_url = f"{railway_url}/webhook"
+        logger.info(f"Setting webhook to: {webhook_url}")
         
         import requests
         response = requests.post(
@@ -676,8 +692,11 @@ def set_webhook():
             json={"url": webhook_url}
         )
         
-        return response.json()
+        result = response.json()
+        logger.info(f"Webhook response: {result}")
+        return result
     except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
         return {"error": str(e)}, 500
 
 if __name__ == "__main__":

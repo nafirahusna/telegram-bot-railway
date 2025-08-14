@@ -645,6 +645,23 @@ def initialize_bot():
 def index():
     return "Telegram Bot is running!"
 
+@app.route('/debug')
+def debug():
+    """Debug endpoint to check environment variables"""
+    try:
+        bot_token = os.getenv("BOT_TOKEN")
+        spreadsheet_id = os.getenv("SPREADSHEET_ID")
+        google_creds = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+        
+        return {
+            "bot_token": "SET" if bot_token else "NOT SET",
+            "spreadsheet_id": "SET" if spreadsheet_id else "NOT SET", 
+            "google_credentials": "SET" if google_creds else "NOT SET",
+            "google_creds_length": len(google_creds) if google_creds else 0
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Webhook endpoint for Telegram"""
@@ -658,10 +675,17 @@ def webhook():
         
         if update_data:
             update = Update.de_json(update_data, application.bot)
-            # Use asyncio.create_task for better handling
+            
+            # Initialize application properly
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(application.process_update(update))
+            
+            async def process():
+                await application.initialize()
+                await application.process_update(update)
+                await application.shutdown()
+            
+            loop.run_until_complete(process())
             loop.close()
         
         return "OK", 200

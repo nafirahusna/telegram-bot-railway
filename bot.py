@@ -1,4 +1,4 @@
-# bot.py - Main bot logic
+# bot.py - Main bot logic (FIXED VERSION)
 import os
 import re
 import asyncio
@@ -41,11 +41,7 @@ class TelegramBot:
         self.application = Application.builder().token(self.token).build()
         self._setup_handlers()
         
-        # Initialize application for webhook
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.application.initialize())
-        logger.info("✅ Telegram Application initialized for webhook")
+        logger.info("✅ TelegramBot initialized successfully")
 
     def _setup_handlers(self):
         """Setup conversation handlers"""
@@ -80,13 +76,10 @@ class TelegramBot:
         
         self.application.add_handler(conv_handler)
 
-    def process_update(self, update):
-        """Process incoming update synchronously"""
+    async def process_update(self, update):
+        """Process incoming update asynchronously"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.application.process_update(update))
-            loop.close()
+            await self.application.process_update(update)
         except Exception as e:
             logger.error(f"❌ Error processing update: {e}")
 

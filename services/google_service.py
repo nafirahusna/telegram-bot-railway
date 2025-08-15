@@ -59,7 +59,7 @@ class GoogleService:
             return False
 
     def create_folder(self, folder_name, parent_folder_id=None):
-        """Create folder in Google Drive"""
+        """Create folder with proper inheritance"""
         try:
             folder_metadata = {
                 'name': folder_name,
@@ -68,29 +68,82 @@ class GoogleService:
             if parent_folder_id or self.parent_folder_id:
                 folder_metadata['parents'] = [parent_folder_id or self.parent_folder_id]
             
-            folder = self.service_drive.files().create(body=folder_metadata).execute()
-            logger.info(f"✅ Folder created: {folder_name}")
-            return folder.get('id')
+            # Create folder dengan shared drive support
+            folder = self.service_drive.files().create(
+                body=folder_metadata,
+                supportsAllDrives=True,  # Support shared drives
+                supportsTeamDrives=True  # Legacy support
+            ).execute()
+            
+            folder_id = folder.get('id')
+            
+            # PENTING: Set permissions explicitly ke folder baru
+            try:
+                # Get parent folder info untuk inherit permissions
+                parent_id = parent_folder_id or self.parent_folder_id
+                parent_info = self.service_drive.files().get(
+                    fileId=parent_id,
+                    supportsAllDrives=True
+                ).execute()
+                
+                # Check if parent is in shared drive
+                if 'driveId' in parent_info:
+                    logger.info(f"✅ Folder created in shared drive: {folder_name}")
+                else:
+                    logger.info(f"✅ Folder created in regular drive: {folder_name}")
+                    
+            except Exception as perm_error:
+                logger.warning(f"⚠️ Could not check parent permissions: {perm_error}")
+            
+            return folder_id
+            
         except Exception as e:
             logger.error(f"❌ Error creating folder: {e}")
             return None
 
     def upload_to_drive(self, file_path, file_name, folder_id):
-        """Upload file to Google Drive"""
+        """Upload file with proper shared drive support"""
         try:
+            # Check if target folder is in shared drive
+            try:
+                folder_info = self.service_drive.files().get(
+                    fileId=folder_id,
+                    supportsAllDrives=True
+                ).execute()
+                is_shared_drive = 'driveId' in folder_info
+            except:
+                is_shared_drive = False
+            
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
             media = MediaFileUpload(file_path, resumable=True)
-            uploaded_file = self.service_drive.files().create(
-                body=file_metadata, 
-                media_body=media
-            ).execute()
-            logger.info(f"✅ File uploaded: {file_name}")
+            
+            # Upload dengan parameter yang sesuai
+            upload_params = {
+                'body': file_metadata,
+                'media_body': media,
+                'supportsAllDrives': True,
+                'supportsTeamDrives': True
+            }
+            
+            uploaded_file = self.service_drive.files().create(**upload_params).execute()
+            
+            if is_shared_drive:
+                logger.info(f"✅ File uploaded to shared drive folder: {file_name}")
+            else:
+                logger.info(f"✅ File uploaded to regular drive folder: {file_name}")
+                
             return uploaded_file.get('id')
+            
         except Exception as e:
             logger.error(f"❌ Error uploading file: {e}")
+            # Log detail error untuk debugging
+            if "storageQuotaExceeded" in str(e):
+                logger.error("💡 Storage quota issue - check folder ownership and permissions")
+            elif "insufficient permissions" in str(e).lower():
+                logger.error("💡 Permission issue - check service account access to folder")
             return None
 
     def get_folder_link(self, folder_id):

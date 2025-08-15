@@ -1,6 +1,7 @@
-# app.py - Entry point untuk webhook
+# app.py - Entry point untuk webhook (FIXED VERSION)
 import os
 import logging
+import asyncio
 from flask import Flask, request
 from telegram import Update
 from bot import TelegramBot
@@ -42,7 +43,9 @@ def webhook():
         logger.info(f"📨 Received update: {json_data}")
         
         update = Update.de_json(json_data, bot.application.bot)
-        bot.process_update(update)
+        
+        # Process update asynchronously using asyncio
+        asyncio.create_task(bot.process_update(update))
         
         return 'ok'
     except Exception as e:

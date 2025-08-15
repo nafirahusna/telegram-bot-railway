@@ -1,4 +1,4 @@
-# services/google_service.py
+# services/google_service.py - Fixed Version with Proper Ownership
 import os
 import json
 import base64
@@ -18,6 +18,7 @@ class GoogleService:
         self.service_drive = None
         self.service_sheets = None
         self.parent_folder_id = parent_folder_id
+        self.owner_email = None  # Email pemilik folder parent
         
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
@@ -51,6 +52,10 @@ class GoogleService:
             
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)
+            
+            # Get owner email dari parent folder
+            self._get_owner_email()
+            
             logger.info("✅ Google APIs authenticated successfully with service account!")
             return True
             
@@ -58,42 +63,56 @@ class GoogleService:
             logger.error(f"❌ Error authenticating with service account: {e}")
             return False
 
+    def _get_owner_email(self):
+        """Get owner email dari parent folder"""
+        try:
+            # Get permissions dari parent folder
+            permissions = self.service_drive.permissions().list(
+                fileId=self.parent_folder_id,
+                supportsAllDrives=True
+            ).execute()
+            
+            # Cari owner
+            for permission in permissions.get('permissions', []):
+                if permission.get('role') == 'owner':
+                    self.owner_email = permission.get('emailAddress')
+                    logger.info(f"✅ Found owner email: {self.owner_email}")
+                    break
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get owner email: {e}")
+            # Fallback - set manual jika diperlukan
+            self.owner_email = os.environ.get('OWNER_EMAIL')  # Bisa di-set di environment
+
     def create_folder(self, folder_name, parent_folder_id=None):
-        """Create folder with proper inheritance"""
+        """Create folder dengan ownership yang benar"""
         try:
             folder_metadata = {
                 'name': folder_name,
                 'mimeType': 'application/vnd.google-apps.folder'
             }
-            if parent_folder_id or self.parent_folder_id:
-                folder_metadata['parents'] = [parent_folder_id or self.parent_folder_id]
             
-            # Create folder dengan shared drive support
+            parent_id = parent_folder_id or self.parent_folder_id
+            if parent_id:
+                folder_metadata['parents'] = [parent_id]
+            
+            # Create folder
             folder = self.service_drive.files().create(
                 body=folder_metadata,
-                supportsAllDrives=True,  # Support shared drives
-                supportsTeamDrives=True  # Legacy support
+                supportsAllDrives=True,
+                supportsTeamDrives=True
             ).execute()
             
             folder_id = folder.get('id')
+            logger.info(f"✅ Folder created: {folder_name} (ID: {folder_id})")
             
-            # PENTING: Set permissions explicitly ke folder baru
-            try:
-                # Get parent folder info untuk inherit permissions
-                parent_id = parent_folder_id or self.parent_folder_id
-                parent_info = self.service_drive.files().get(
-                    fileId=parent_id,
-                    supportsAllDrives=True
-                ).execute()
-                
-                # Check if parent is in shared drive
-                if 'driveId' in parent_info:
-                    logger.info(f"✅ Folder created in shared drive: {folder_name}")
+            # CRITICAL: Transfer ownership ke pemilik asli
+            if folder_id and self.owner_email:
+                success = self._transfer_ownership(folder_id, self.owner_email)
+                if success:
+                    logger.info(f"✅ Ownership transferred to {self.owner_email}")
                 else:
-                    logger.info(f"✅ Folder created in regular drive: {folder_name}")
-                    
-            except Exception as perm_error:
-                logger.warning(f"⚠️ Could not check parent permissions: {perm_error}")
+                    logger.warning(f"⚠️ Could not transfer ownership, keeping service account ownership")
             
             return folder_id
             
@@ -101,49 +120,76 @@ class GoogleService:
             logger.error(f"❌ Error creating folder: {e}")
             return None
 
-    def upload_to_drive(self, file_path, file_name, folder_id):
-        """Upload file with proper shared drive support"""
+    def _transfer_ownership(self, file_id, owner_email):
+        """Transfer ownership file/folder ke owner yang benar"""
         try:
-            # Check if target folder is in shared drive
-            try:
-                folder_info = self.service_drive.files().get(
-                    fileId=folder_id,
-                    supportsAllDrives=True
-                ).execute()
-                is_shared_drive = 'driveId' in folder_info
-            except:
-                is_shared_drive = False
+            # Transfer ownership
+            permission_body = {
+                'role': 'owner',
+                'type': 'user',
+                'emailAddress': owner_email
+            }
             
+            self.service_drive.permissions().create(
+                fileId=file_id,
+                body=permission_body,
+                transferOwnership=True,  # CRITICAL: Transfer ownership
+                supportsAllDrives=True
+            ).execute()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error transferring ownership: {e}")
+            # Jika transfer ownership gagal, tetap lanjut tapi dengan warning
+            return False
+
+    def upload_to_drive(self, file_path, file_name, folder_id):
+        """Upload file dengan ownership yang benar"""
+        try:
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
+            
             media = MediaFileUpload(file_path, resumable=True)
             
-            # Upload dengan parameter yang sesuai
-            upload_params = {
-                'body': file_metadata,
-                'media_body': media,
-                'supportsAllDrives': True,
-                'supportsTeamDrives': True
-            }
+            # Upload file
+            uploaded_file = self.service_drive.files().create(
+                body=file_metadata,
+                media_body=media,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
             
-            uploaded_file = self.service_drive.files().create(**upload_params).execute()
+            file_id = uploaded_file.get('id')
+            logger.info(f"✅ File uploaded: {file_name} (ID: {file_id})")
             
-            if is_shared_drive:
-                logger.info(f"✅ File uploaded to shared drive folder: {file_name}")
-            else:
-                logger.info(f"✅ File uploaded to regular drive folder: {file_name}")
-                
-            return uploaded_file.get('id')
+            # CRITICAL: Transfer ownership ke pemilik asli
+            if file_id and self.owner_email:
+                success = self._transfer_ownership(file_id, self.owner_email)
+                if success:
+                    logger.info(f"✅ File ownership transferred to {self.owner_email}")
+                else:
+                    logger.warning(f"⚠️ File ownership transfer failed, but upload succeeded")
+            
+            return file_id
             
         except Exception as e:
             logger.error(f"❌ Error uploading file: {e}")
-            # Log detail error untuk debugging
-            if "storageQuotaExceeded" in str(e):
-                logger.error("💡 Storage quota issue - check folder ownership and permissions")
-            elif "insufficient permissions" in str(e).lower():
-                logger.error("💡 Permission issue - check service account access to folder")
+            
+            # Detailed error analysis
+            error_str = str(e).lower()
+            if "storagequotaexceeded" in error_str:
+                logger.error("💡 SOLUTION: Storage quota issue detected!")
+                logger.error("   - Service account quota full (15GB limit)")
+                logger.error("   - Need to transfer ownership to personal account")
+                logger.error("   - Or use shared drive instead of personal drive")
+            elif "insufficient permissions" in error_str:
+                logger.error("💡 SOLUTION: Permission issue detected!")
+                logger.error("   - Service account needs 'Editor' access to parent folder")
+                logger.error("   - Or parent folder owner needs to grant transfer permissions")
+            
             return None
 
     def get_folder_link(self, folder_id):
@@ -171,3 +217,28 @@ class GoogleService:
         except Exception as e:
             logger.error(f"❌ Error updating spreadsheet: {e}")
             return False
+
+    def check_quota_status(self):
+        """Check storage quota status"""
+        try:
+            about = self.service_drive.about().get(fields="storageQuota").execute()
+            quota = about.get('storageQuota', {})
+            
+            usage = int(quota.get('usage', 0))
+            limit = int(quota.get('limit', 0))
+            
+            logger.info(f"📊 Storage Quota Status:")
+            logger.info(f"   Used: {usage / (1024**3):.2f} GB")
+            logger.info(f"   Limit: {limit / (1024**3):.2f} GB")
+            logger.info(f"   Available: {(limit - usage) / (1024**3):.2f} GB")
+            
+            return {
+                'used': usage,
+                'limit': limit,
+                'available': limit - usage,
+                'percentage': (usage / limit) * 100 if limit > 0 else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking quota: {e}")
+            return None

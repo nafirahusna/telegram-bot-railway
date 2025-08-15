@@ -577,8 +577,11 @@ class TelegramBot:
         @app.route('/webhook', methods=['POST'])
         def webhook():
             try:
-                update = Update.de_json(request.get_json(force=True), self.application.bot)
-                asyncio.run(self.application.process_update(update))
+                json_data = request.get_json(force=True)
+                update = Update.de_json(json_data, self.application.bot)
+                
+                # Gunakan create_task untuk async processing
+                asyncio.create_task(self.application.process_update(update))
                 return 'ok'
             except Exception as e:
                 print(f"Error processing update: {e}")
@@ -590,6 +593,7 @@ class TelegramBot:
         """Run the bot with webhook"""
         print("🚀 Starting Telegram Bot with webhook...")
         
+        # Initialize Application
         self.application = Application.builder().token(self.token).build()
         
         # Conversation handler (sama seperti sebelumnya)
@@ -645,6 +649,10 @@ class TelegramBot:
         
         # Add handlers
         self.application.add_handler(conv_handler)
+        
+        # PENTING: Initialize application
+        import asyncio
+        asyncio.run(self.application.initialize())
         
         # Setup Flask app
         app = self.setup_webhook()

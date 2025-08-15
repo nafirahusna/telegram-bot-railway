@@ -553,36 +553,36 @@ class TelegramBot:
         
         return UPLOAD_PHOTO
 
-def setup_webhook(self):
-    """Setup webhook for the bot"""
-    from flask import Flask, request
-    import asyncio
-    import logging
+    def setup_webhook(self):
+        """Setup webhook for the bot"""
+        from flask import Flask, request
+        import asyncio
+        import logging
+        
+        # Setup logging
+        logging.basicConfig(
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            level=logging.INFO
+        )
+        
+        app = Flask(__name__)
+        
+        @app.route('/')
+        def index():
+            return 'Telegram Bot is running with webhook!'
+        
+        @app.route('/webhook', methods=['POST'])
+        def webhook():
+            try:
+                update = Update.de_json(request.get_json(force=True), self.application.bot)
+                asyncio.run(self.application.process_update(update))
+                return 'ok'
+            except Exception as e:
+                print(f"Error processing update: {e}")
+                return 'error', 500
+        
+        return app
     
-    # Setup logging
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO
-    )
-    
-    app = Flask(__name__)
-    
-    @app.route('/')
-    def index():
-        return 'Telegram Bot is running with webhook!'
-    
-    @app.route('/webhook', methods=['POST'])
-    def webhook():
-        try:
-            update = Update.de_json(request.get_json(force=True), self.application.bot)
-            asyncio.run(self.application.process_update(update))
-            return 'ok'
-        except Exception as e:
-            print(f"Error processing update: {e}")
-            return 'error', 500
-    
-    return app
-
     def run(self):
         """Run the bot with webhook"""
         print("🚀 Starting Telegram Bot with webhook...")

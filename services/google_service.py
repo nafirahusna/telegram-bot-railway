@@ -1,10 +1,14 @@
+# services/google_service.py
 import os
 import json
 import base64
+import logging
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from googleapiclient.http import MediaFileUpload
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # Scopes untuk Google API
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
@@ -18,11 +22,6 @@ class GoogleService:
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
         try:
-            from google.oauth2 import service_account
-            import json
-            import base64
-            import os
-            
             # Try to load from environment variable first
             service_account_key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
             
@@ -34,9 +33,9 @@ class GoogleService:
                         service_account_info,
                         scopes=SCOPES
                     )
-                    print("✅ Using service account from environment variable")
+                    logger.info("✅ Using service account from environment variable")
                 except Exception as e:
-                    print(f"❌ Error decoding service account from env var: {e}")
+                    logger.error(f"❌ Error decoding service account from env var: {e}")
                     return False
             else:
                 # Load from file (fallback)
@@ -45,18 +44,18 @@ class GoogleService:
                         'service-account.json',
                         scopes=SCOPES
                     )
-                    print("✅ Using service account from file")
+                    logger.info("✅ Using service account from file")
                 else:
-                    print("❌ No service account found (neither env var nor file)")
+                    logger.error("❌ No service account found (neither env var nor file)")
                     return False
             
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)
-            print("✅ Google APIs authenticated successfully with service account!")
+            logger.info("✅ Google APIs authenticated successfully with service account!")
             return True
             
         except Exception as e:
-            print(f"❌ Error authenticating with service account: {e}")
+            logger.error(f"❌ Error authenticating with service account: {e}")
             return False
 
     def create_folder(self, folder_name, parent_folder_id=None):
@@ -70,10 +69,10 @@ class GoogleService:
                 folder_metadata['parents'] = [parent_folder_id or self.parent_folder_id]
             
             folder = self.service_drive.files().create(body=folder_metadata).execute()
-            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Folder created: {folder_name}")
+            logger.info(f"✅ Folder created: {folder_name}")
             return folder.get('id')
         except Exception as e:
-            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Error creating folder: {e}")
+            logger.error(f"❌ Error creating folder: {e}")
             return None
 
     def upload_to_drive(self, file_path, file_name, folder_id):
@@ -88,10 +87,10 @@ class GoogleService:
                 body=file_metadata, 
                 media_body=media
             ).execute()
-            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ File uploaded: {file_name}")
+            logger.info(f"✅ File uploaded: {file_name}")
             return uploaded_file.get('id')
         except Exception as e:
-            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Error uploading file: {e}")
+            logger.error(f"❌ Error uploading file: {e}")
             return None
 
     def get_folder_link(self, folder_id):
@@ -112,10 +111,10 @@ class GoogleService:
                 body=body
             ).execute()
             
-            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Successfully added row to spreadsheet")
-            print(f"Row data: {row_data}")  # Debug print
+            logger.info(f"✅ Successfully added row to spreadsheet")
+            logger.info(f"Row data: {row_data}")
             return True
             
         except Exception as e:
-            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Error updating spreadsheet: {e}")
+            logger.error(f"❌ Error updating spreadsheet: {e}")
             return False

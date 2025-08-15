@@ -1,9 +1,10 @@
-# app.py - Entry point untuk webhook (FIXED VERSION)
+# app.py - Simple Stable Version
 import os
 import logging
 import asyncio
 import threading
-from flask import Flask, request
+import time
+from flask import Flask, request, jsonify
 from telegram import Update
 from bot import TelegramBot
 
@@ -25,75 +26,151 @@ if not BOT_TOKEN or not SPREADSHEET_ID:
 # Create Flask app
 app = Flask(__name__)
 
-# Initialize bot
-try:
-    bot = TelegramBot(BOT_TOKEN, SPREADSHEET_ID)
-    logger.info("✅ Bot initialized successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize bot: {e}")
-    exit(1)
-
-# Global event loop for async operations
+# Global variables
+bot = None
 loop = None
 loop_thread = None
+bot_ready = False
 
-def run_event_loop():
-    """Run event loop in separate thread"""
+def create_and_run_loop():
+    """Create and run event loop in dedicated thread"""
     global loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-def ensure_event_loop():
-    """Ensure event loop is running"""
-    global loop, loop_thread
-    if loop is None or loop_thread is None or not loop_thread.is_alive():
-        loop_thread = threading.Thread(target=run_event_loop, daemon=True)
-        loop_thread.start()
-        # Wait a bit for loop to be ready
-        import time
-        time.sleep(0.1)
-
-def run_async_task(coro):
-    """Run async task in the event loop"""
-    ensure_event_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
     try:
-        # Don't wait for result to avoid blocking Flask
-        return future
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("🔄 Event loop created and running")
+        loop.run_forever()
     except Exception as e:
-        logger.error(f"❌ Error running async task: {e}")
-        return None
+        logger.error(f"❌ Error in event loop: {e}")
+
+def start_event_loop():
+    """Start event loop in background thread"""
+    global loop_thread
+    loop_thread = threading.Thread(target=create_and_run_loop, daemon=True)
+    loop_thread.start()
+    
+    # Wait for loop to be ready
+    time.sleep(0.5)
+    return loop is not None
+
+async def initialize_bot_async():
+    """Initialize bot asynchronously"""
+    global bot, bot_ready
+    try:
+        logger.info("🤖 Creating TelegramBot instance...")
+        bot = TelegramBot(BOT_TOKEN, SPREADSHEET_ID)
+        
+        logger.info("🔧 Initializing Telegram Application...")
+        success = await bot.initialize_application()
+        
+        if success:
+            bot_ready = True
+            logger.info("✅ Bot fully initialized and ready")
+            return True
+        else:
+            logger.error("❌ Failed to initialize bot application")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error initializing bot: {e}")
+        return False
+
+def initialize_bot():
+    """Initialize bot synchronously"""
+    if not loop:
+        logger.error("❌ Event loop not available")
+        return False
+    
+    try:
+        future = asyncio.run_coroutine_threadsafe(initialize_bot_async(), loop)
+        return future.result(timeout=60)  # Wait up to 60 seconds
+    except Exception as e:
+        logger.error(f"❌ Error initializing bot: {e}")
+        return False
 
 @app.route('/')
 def index():
-    return 'Telegram Bot is running with webhook! 🤖'
+    return jsonify({
+        'status': 'running',
+        'bot_ready': bot_ready,
+        'loop_running': loop is not None and not loop.is_closed(),
+        'message': 'Telegram Bot Webhook Server'
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({
+        'status': 'healthy' if bot_ready else 'initializing',
+        'bot': 'ready' if bot_ready else 'not_ready',
+        'loop': 'running' if loop and not loop.is_closed() else 'not_running'
+    })
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
+        # Check if bot is ready
+        if not bot_ready or not bot:
+            logger.warning("⚠️ Bot not ready, ignoring webhook")
+            return jsonify({'status': 'bot_not_ready'}), 503
+        
+        # Check loop
+        if not loop or loop.is_closed():
+            logger.error("❌ Event loop not available")
+            return jsonify({'status': 'loop_error'}), 503
+        
+        # Get and validate JSON data
         json_data = request.get_json(force=True)
-        logger.info(f"📨 Received update: {json_data}")
+        if not json_data:
+            logger.error("❌ Empty JSON data received")
+            return jsonify({'status': 'invalid_data'}), 400
         
-        update = Update.de_json(json_data, bot.application.bot)
+        logger.info(f"📨 Processing webhook update")
         
-        # Process update asynchronously without blocking
-        future = run_async_task(bot.process_update(update))
-        
-        if future is not None:
-            logger.info("✅ Update queued for processing")
-            return 'ok'
-        else:
-            logger.error("❌ Failed to queue update")
-            return 'error', 500
+        try:
+            # Create Update object
+            update = Update.de_json(json_data, bot.application.bot)
             
+            # Schedule processing (don't wait for result)
+            future = asyncio.run_coroutine_threadsafe(
+                bot.process_update(update), 
+                loop
+            )
+            
+            logger.info("✅ Update queued successfully")
+            return jsonify({'status': 'ok'})
+            
+        except Exception as parse_error:
+            logger.error(f"❌ Error parsing update: {parse_error}")
+            return jsonify({'status': 'parse_error'}), 400
+        
     except Exception as e:
-        logger.error(f"❌ Error in webhook handler: {e}")
-        return 'error', 500
+        logger.error(f"❌ Webhook error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Initialize event loop when app starts
-ensure_event_loop()
+# Application startup
+def startup():
+    global bot_ready
+    
+    logger.info("🚀 Starting Telegram Bot Webhook Server...")
+    
+    # Start event loop
+    logger.info("⚡ Starting event loop...")
+    if not start_event_loop():
+        logger.error("❌ Failed to start event loop")
+        exit(1)
+    
+    # Initialize bot
+    logger.info("🤖 Initializing bot...")
+    if not initialize_bot():
+        logger.error("❌ Failed to initialize bot")
+        exit(1)
+    
+    logger.info("✅ Application startup complete!")
+
+# Run startup
+startup()
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
+    logger.info(f"🌐 Starting Flask server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)

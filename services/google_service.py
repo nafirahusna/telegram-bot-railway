@@ -1,4 +1,4 @@
-# services/google_service.py - Fixed Version with Proper Ownership
+# services/google_service.py - FIXED VERSION WITH PROPER OWNERSHIP TRANSFER
 import os
 import json
 import base64
@@ -18,7 +18,7 @@ class GoogleService:
         self.service_drive = None
         self.service_sheets = None
         self.parent_folder_id = parent_folder_id
-        self.owner_email = None  # Email pemilik folder parent
+        self.owner_email = "muhamadsidiq2@gmail.com"  # FIXED: Set your email directly
         
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
@@ -53,50 +53,26 @@ class GoogleService:
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)
             
-            # Get owner email dari parent folder
-            self._get_owner_email()
-            
-            logger.info("✅ Google APIs authenticated successfully with service account!")
+            logger.info(f"✅ Google APIs authenticated successfully! Owner: {self.owner_email}")
             return True
             
         except Exception as e:
             logger.error(f"❌ Error authenticating with service account: {e}")
             return False
 
-    def _get_owner_email(self):
-        """Get owner email dari parent folder"""
-        try:
-            # Get permissions dari parent folder
-            permissions = self.service_drive.permissions().list(
-                fileId=self.parent_folder_id,
-                supportsAllDrives=True
-            ).execute()
-            
-            # Cari owner
-            for permission in permissions.get('permissions', []):
-                if permission.get('role') == 'owner':
-                    self.owner_email = permission.get('emailAddress')
-                    logger.info(f"✅ Found owner email: {self.owner_email}")
-                    break
-                    
-        except Exception as e:
-            logger.warning(f"⚠️ Could not get owner email: {e}")
-            # Fallback - set manual jika diperlukan
-            self.owner_email = os.environ.get('OWNER_EMAIL')  # Bisa di-set di environment
-
     def create_folder(self, folder_name, parent_folder_id=None):
-        """Create folder dengan ownership yang benar"""
+        """Create folder directly in owner's drive with immediate ownership transfer"""
         try:
+            parent_id = parent_folder_id or self.parent_folder_id
+            
+            # STEP 1: Create folder metadata with immediate owner setting
             folder_metadata = {
                 'name': folder_name,
-                'mimeType': 'application/vnd.google-apps.folder'
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_id] if parent_id else []
             }
             
-            parent_id = parent_folder_id or self.parent_folder_id
-            if parent_id:
-                folder_metadata['parents'] = [parent_id]
-            
-            # Create folder
+            # STEP 2: Create folder
             folder = self.service_drive.files().create(
                 body=folder_metadata,
                 supportsAllDrives=True,
@@ -104,15 +80,32 @@ class GoogleService:
             ).execute()
             
             folder_id = folder.get('id')
-            logger.info(f"✅ Folder created: {folder_name} (ID: {folder_id})")
+            logger.info(f"📁 Folder created: {folder_name} (ID: {folder_id})")
             
-            # CRITICAL: Transfer ownership ke pemilik asli
+            # STEP 3: IMMEDIATELY transfer ownership to avoid quota issues
             if folder_id and self.owner_email:
-                success = self._transfer_ownership(folder_id, self.owner_email)
-                if success:
-                    logger.info(f"✅ Ownership transferred to {self.owner_email}")
-                else:
-                    logger.warning(f"⚠️ Could not transfer ownership, keeping service account ownership")
+                try:
+                    # Add owner permission with transferOwnership=True
+                    permission_body = {
+                        'role': 'owner',
+                        'type': 'user', 
+                        'emailAddress': self.owner_email
+                    }
+                    
+                    self.service_drive.permissions().create(
+                        fileId=folder_id,
+                        body=permission_body,
+                        transferOwnership=True,
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False  # Don't spam email notifications
+                    ).execute()
+                    
+                    logger.info(f"✅ Folder ownership transferred to {self.owner_email}")
+                    
+                except Exception as transfer_error:
+                    logger.error(f"❌ Ownership transfer failed: {transfer_error}")
+                    # Don't return None, folder still works without transfer
+                    logger.warning("⚠️ Folder created but ownership not transferred")
             
             return folder_id
             
@@ -120,33 +113,10 @@ class GoogleService:
             logger.error(f"❌ Error creating folder: {e}")
             return None
 
-    def _transfer_ownership(self, file_id, owner_email):
-        """Transfer ownership file/folder ke owner yang benar"""
-        try:
-            # Transfer ownership
-            permission_body = {
-                'role': 'owner',
-                'type': 'user',
-                'emailAddress': owner_email
-            }
-            
-            self.service_drive.permissions().create(
-                fileId=file_id,
-                body=permission_body,
-                transferOwnership=True,  # CRITICAL: Transfer ownership
-                supportsAllDrives=True
-            ).execute()
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error transferring ownership: {e}")
-            # Jika transfer ownership gagal, tetap lanjut tapi dengan warning
-            return False
-
     def upload_to_drive(self, file_path, file_name, folder_id):
-        """Upload file dengan ownership yang benar"""
+        """Upload file with immediate ownership transfer to avoid quota issues"""
         try:
+            # STEP 1: Upload file metadata
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
@@ -154,7 +124,7 @@ class GoogleService:
             
             media = MediaFileUpload(file_path, resumable=True)
             
-            # Upload file
+            # STEP 2: Upload file
             uploaded_file = self.service_drive.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -163,32 +133,109 @@ class GoogleService:
             ).execute()
             
             file_id = uploaded_file.get('id')
-            logger.info(f"✅ File uploaded: {file_name} (ID: {file_id})")
+            logger.info(f"📄 File uploaded: {file_name} (ID: {file_id})")
             
-            # CRITICAL: Transfer ownership ke pemilik asli
+            # STEP 3: IMMEDIATELY transfer ownership to avoid quota counting against service account
             if file_id and self.owner_email:
-                success = self._transfer_ownership(file_id, self.owner_email)
-                if success:
+                try:
+                    permission_body = {
+                        'role': 'owner',
+                        'type': 'user',
+                        'emailAddress': self.owner_email
+                    }
+                    
+                    self.service_drive.permissions().create(
+                        fileId=file_id,
+                        body=permission_body,
+                        transferOwnership=True,
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False  # Don't spam notifications
+                    ).execute()
+                    
                     logger.info(f"✅ File ownership transferred to {self.owner_email}")
-                else:
-                    logger.warning(f"⚠️ File ownership transfer failed, but upload succeeded")
+                    
+                except Exception as transfer_error:
+                    logger.error(f"❌ File ownership transfer failed: {transfer_error}")
+                    # File uploaded successfully, just ownership transfer failed
+                    logger.warning("⚠️ File uploaded but ownership not transferred")
             
             return file_id
             
         except Exception as e:
             logger.error(f"❌ Error uploading file: {e}")
             
-            # Detailed error analysis
+            # Enhanced error handling
             error_str = str(e).lower()
             if "storagequotaexceeded" in error_str:
-                logger.error("💡 SOLUTION: Storage quota issue detected!")
-                logger.error("   - Service account quota full (15GB limit)")
-                logger.error("   - Need to transfer ownership to personal account")
-                logger.error("   - Or use shared drive instead of personal drive")
-            elif "insufficient permissions" in error_str:
-                logger.error("💡 SOLUTION: Permission issue detected!")
-                logger.error("   - Service account needs 'Editor' access to parent folder")
-                logger.error("   - Or parent folder owner needs to grant transfer permissions")
+                logger.error("🚨 QUOTA EXCEEDED - ATTEMPTING WORKAROUND...")
+                
+                # Try alternative approach: Create file first, then upload content
+                return self._upload_with_quota_workaround(file_path, file_name, folder_id)
+            elif "insufficient" in error_str and "permission" in error_str:
+                logger.error("🚨 PERMISSION ISSUE:")
+                logger.error(f"   Make sure {self.owner_email} has granted 'Manager' access to service account")
+                logger.error(f"   Or add service account as 'Editor' to parent folder: {self.parent_folder_id}")
+            
+            return None
+
+    def _upload_with_quota_workaround(self, file_path, file_name, folder_id):
+        """Alternative upload method to bypass quota issues"""
+        try:
+            logger.info("🔄 Trying quota workaround method...")
+            
+            # Method 1: Create empty file first, transfer ownership, then update content
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            
+            # Create empty file
+            empty_file = self.service_drive.files().create(
+                body=file_metadata,
+                supportsAllDrives=True
+            ).execute()
+            
+            file_id = empty_file.get('id')
+            
+            if file_id and self.owner_email:
+                # Transfer ownership of empty file first
+                permission_body = {
+                    'role': 'owner',
+                    'type': 'user',
+                    'emailAddress': self.owner_email
+                }
+                
+                self.service_drive.permissions().create(
+                    fileId=file_id,
+                    body=permission_body,
+                    transferOwnership=True,
+                    supportsAllDrives=True,
+                    sendNotificationEmail=False
+                ).execute()
+                
+                logger.info("✅ Empty file created and ownership transferred")
+                
+                # Now try to update with actual content
+                media = MediaFileUpload(file_path, resumable=True)
+                
+                updated_file = self.service_drive.files().update(
+                    fileId=file_id,
+                    media_body=media,
+                    supportsAllDrives=True
+                ).execute()
+                
+                logger.info(f"✅ File content updated successfully: {file_name}")
+                return file_id
+            
+        except Exception as workaround_error:
+            logger.error(f"❌ Quota workaround failed: {workaround_error}")
+            
+            # Last resort: Provide manual instructions
+            logger.error("🚨 MANUAL ACTION REQUIRED:")
+            logger.error("1. Go to Google Drive")
+            logger.error("2. Find the service account files (probably in 'Shared with me')")
+            logger.error("3. Move them to your personal drive")
+            logger.error("4. Or create a Shared Drive and use that instead")
             
             return None
 
@@ -211,34 +258,100 @@ class GoogleService:
             ).execute()
             
             logger.info(f"✅ Successfully added row to spreadsheet")
-            logger.info(f"Row data: {row_data}")
             return True
             
         except Exception as e:
             logger.error(f"❌ Error updating spreadsheet: {e}")
             return False
 
-    def check_quota_status(self):
-        """Check storage quota status"""
+    def check_service_account_permissions(self):
+        """Check if service account has proper permissions"""
         try:
-            about = self.service_drive.about().get(fields="storageQuota").execute()
-            quota = about.get('storageQuota', {})
+            # Test drive access
+            drive_test = self.service_drive.files().list(pageSize=1).execute()
+            logger.info("✅ Drive API access confirmed")
             
-            usage = int(quota.get('usage', 0))
-            limit = int(quota.get('limit', 0))
+            # Test parent folder access
+            if self.parent_folder_id:
+                folder_info = self.service_drive.files().get(
+                    fileId=self.parent_folder_id,
+                    supportsAllDrives=True
+                ).execute()
+                logger.info(f"✅ Parent folder access confirmed: {folder_info.get('name')}")
+                
+                # Check permissions on parent folder
+                permissions = self.service_drive.permissions().list(
+                    fileId=self.parent_folder_id,
+                    supportsAllDrives=True
+                ).execute()
+                
+                service_account_email = None
+                for perm in permissions.get('permissions', []):
+                    if perm.get('type') == 'serviceAccount':
+                        service_account_email = perm.get('emailAddress')
+                        break
+                
+                if service_account_email:
+                    logger.info(f"✅ Service account found in permissions: {service_account_email}")
+                else:
+                    logger.warning("⚠️ Service account not found in folder permissions")
+                    logger.warning("💡 Add service account as 'Editor' to parent folder")
             
-            logger.info(f"📊 Storage Quota Status:")
-            logger.info(f"   Used: {usage / (1024**3):.2f} GB")
-            logger.info(f"   Limit: {limit / (1024**3):.2f} GB")
-            logger.info(f"   Available: {(limit - usage) / (1024**3):.2f} GB")
-            
-            return {
-                'used': usage,
-                'limit': limit,
-                'available': limit - usage,
-                'percentage': (usage / limit) * 100 if limit > 0 else 0
-            }
+            return True
             
         except Exception as e:
-            logger.error(f"❌ Error checking quota: {e}")
-            return None
+            logger.error(f"❌ Permission check failed: {e}")
+            return False
+
+    def cleanup_service_account_files(self):
+        """Clean up files owned by service account (emergency cleanup)"""
+        try:
+            logger.info("🧹 Cleaning up service account files...")
+            
+            # List files owned by service account
+            results = self.service_drive.files().list(
+                q="'me' in owners",
+                pageSize=100,
+                fields="files(id, name, size, owners)"
+            ).execute()
+            
+            files = results.get('files', [])
+            
+            total_size = 0
+            for file in files:
+                size = int(file.get('size', 0))
+                total_size += size
+                logger.info(f"📁 {file['name']}: {size / (1024*1024):.1f} MB")
+            
+            logger.info(f"📊 Total size: {total_size / (1024*1024*1024):.2f} GB")
+            
+            # Transfer ownership of all files
+            transferred = 0
+            for file in files:
+                try:
+                    permission_body = {
+                        'role': 'owner',
+                        'type': 'user',
+                        'emailAddress': self.owner_email
+                    }
+                    
+                    self.service_drive.permissions().create(
+                        fileId=file['id'],
+                        body=permission_body,
+                        transferOwnership=True,
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False
+                    ).execute()
+                    
+                    transferred += 1
+                    logger.info(f"✅ Transferred: {file['name']}")
+                    
+                except Exception as transfer_error:
+                    logger.error(f"❌ Failed to transfer {file['name']}: {transfer_error}")
+            
+            logger.info(f"✅ Cleanup complete: {transferred}/{len(files)} files transferred")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Cleanup failed: {e}")
+            return False

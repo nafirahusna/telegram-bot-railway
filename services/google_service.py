@@ -27,18 +27,28 @@ class GoogleService:
             service_account_key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
             
             if service_account_key:
-                # Decode base64 and load JSON
-                service_account_info = json.loads(base64.b64decode(service_account_key))
-                creds = service_account.Credentials.from_service_account_info(
-                    service_account_info,
-                    scopes=SCOPES
-                )
+                try:
+                    # Decode base64 and load JSON
+                    service_account_info = json.loads(base64.b64decode(service_account_key))
+                    creds = service_account.Credentials.from_service_account_info(
+                        service_account_info,
+                        scopes=SCOPES
+                    )
+                    print("✅ Using service account from environment variable")
+                except Exception as e:
+                    print(f"❌ Error decoding service account from env var: {e}")
+                    return False
             else:
                 # Load from file (fallback)
-                creds = service_account.Credentials.from_service_account_file(
-                    'service-account.json',
-                    scopes=SCOPES
-                )
+                if os.path.exists('service-account.json'):
+                    creds = service_account.Credentials.from_service_account_file(
+                        'service-account.json',
+                        scopes=SCOPES
+                    )
+                    print("✅ Using service account from file")
+                else:
+                    print("❌ No service account found (neither env var nor file)")
+                    return False
             
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)

@@ -1,6 +1,8 @@
 import os
 from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 from datetime import datetime
 
@@ -16,17 +18,21 @@ class GoogleService:
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
         try:
-            creds = Credentials.from_service_account_file(
+            from google.oauth2 import service_account
+            
+            # Load service account credentials
+            creds = service_account.Credentials.from_service_account_file(
                 'service-account.json',
                 scopes=SCOPES
             )
             
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)
-            print("✓ Google APIs authenticated successfully!")
+            print("✅ Google APIs authenticated successfully with service account!")
             return True
+            
         except Exception as e:
-            print(f"✖ Error authenticating with service account: {e}")
+            print(f"❌ Error authenticating with service account: {e}")
             return False
 
     def create_folder(self, folder_name, parent_folder_id=None):
@@ -40,10 +46,10 @@ class GoogleService:
                 folder_metadata['parents'] = [parent_folder_id or self.parent_folder_id]
             
             folder = self.service_drive.files().create(body=folder_metadata).execute()
-            print(f"Ã¢Å“â€¦ Folder created: {folder_name}")
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Folder created: {folder_name}")
             return folder.get('id')
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Error creating folder: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Error creating folder: {e}")
             return None
 
     def upload_to_drive(self, file_path, file_name, folder_id):
@@ -58,10 +64,10 @@ class GoogleService:
                 body=file_metadata, 
                 media_body=media
             ).execute()
-            print(f"Ã¢Å“â€¦ File uploaded: {file_name}")
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ File uploaded: {file_name}")
             return uploaded_file.get('id')
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Error uploading file: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Error uploading file: {e}")
             return None
 
     def get_folder_link(self, folder_id):
@@ -82,10 +88,10 @@ class GoogleService:
                 body=body
             ).execute()
             
-            print(f"Ã¢Å“â€¦ Successfully added row to spreadsheet")
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Successfully added row to spreadsheet")
             print(f"Row data: {row_data}")  # Debug print
             return True
             
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Error updating spreadsheet: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Error updating spreadsheet: {e}")
             return False

@@ -16,12 +16,26 @@ class GoogleService:
         """Authenticate with Google APIs using service account"""
         try:
             from google.oauth2 import service_account
+            import json
+            import base64
+            import os
             
-            # Load service account credentials
-            creds = service_account.Credentials.from_service_account_file(
-                'service-account.json',
-                scopes=SCOPES
-            )
+            # Try to load from environment variable first
+            service_account_key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
+            
+            if service_account_key:
+                # Decode base64 and load JSON
+                service_account_info = json.loads(base64.b64decode(service_account_key))
+                creds = service_account.Credentials.from_service_account_info(
+                    service_account_info,
+                    scopes=SCOPES
+                )
+            else:
+                # Load from file (fallback)
+                creds = service_account.Credentials.from_service_account_file(
+                    'service-account.json',
+                    scopes=SCOPES
+                )
             
             self.service_drive = build('drive', 'v3', credentials=creds)
             self.service_sheets = build('sheets', 'v4', credentials=creds)

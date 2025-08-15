@@ -580,8 +580,12 @@ class TelegramBot:
                 json_data = request.get_json(force=True)
                 update = Update.de_json(json_data, self.application.bot)
                 
-                # Gunakan create_task untuk async processing
-                asyncio.create_task(self.application.process_update(update))
+                # Process update synchronously
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.application.process_update(update))
+                loop.close()
+                
                 return 'ok'
             except Exception as e:
                 print(f"Error processing update: {e}")

@@ -1,4 +1,4 @@
-# app.py - Simple Stable Version
+# app.py - Simple Stable Version with Ownership Transfer
 import os
 import logging
 import asyncio
@@ -88,13 +88,44 @@ def initialize_bot():
         logger.error(f"❌ Error initializing bot: {e}")
         return False
 
+def test_ownership_transfer():
+    """Test ownership transfer capability synchronously"""
+    if not bot or not bot.google_service:
+        logger.warning("⚠️ Bot or Google service not available for ownership test")
+        return False
+    
+    try:
+        logger.info("🧪 Testing ownership transfer capability...")
+        test_result = bot.google_service.test_ownership_transfer()
+        
+        if test_result:
+            logger.info("✅ Ownership transfer test PASSED - files will use personal Gmail quota!")
+        else:
+            logger.warning("⚠️ Ownership transfer test FAILED - files will use service account quota")
+            logger.warning("⚠️ This may cause upload failures due to quota limits")
+        
+        return test_result
+        
+    except Exception as e:
+        logger.error(f"❌ Error testing ownership transfer: {e}")
+        return False
+
 @app.route('/')
 def index():
+    # Get quota info if available
+    quota_info = {}
+    if bot and bot.google_service:
+        try:
+            quota_info = bot.google_service.get_quota_info() or {}
+        except:
+            pass
+    
     return jsonify({
         'status': 'running',
         'bot_ready': bot_ready,
         'loop_running': loop is not None and not loop.is_closed(),
-        'message': 'Telegram Bot Webhook Server'
+        'message': 'Telegram Bot Webhook Server',
+        'quota_info': quota_info
     })
 
 @app.route('/health')
@@ -104,6 +135,59 @@ def health():
         'bot': 'ready' if bot_ready else 'not_ready',
         'loop': 'running' if loop and not loop.is_closed() else 'not_running'
     })
+
+@app.route('/test-ownership')
+def test_ownership_endpoint():
+    """Test endpoint for ownership transfer"""
+    try:
+        if not bot or not bot.google_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Bot or Google service not available'
+            }), 503
+        
+        test_result = test_ownership_transfer()
+        
+        # Get usage info
+        usage_info = bot.google_service.get_service_account_usage()
+        
+        return jsonify({
+            'status': 'success' if test_result else 'failed',
+            'ownership_transfer_working': test_result,
+            'service_account_usage': usage_info,
+            'message': 'Ownership transfer test completed'
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in test ownership endpoint: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/cleanup')
+def cleanup_endpoint():
+    """Cleanup endpoint for service account files"""
+    try:
+        if not bot or not bot.google_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Bot or Google service not available'
+            }), 503
+        
+        cleanup_result = bot.google_service.cleanup_service_account_files()
+        
+        return jsonify({
+            'status': 'success' if cleanup_result else 'failed',
+            'message': 'Cleanup completed'
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in cleanup endpoint: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -164,6 +248,16 @@ def startup():
     if not initialize_bot():
         logger.error("❌ Failed to initialize bot")
         exit(1)
+    
+    # Test ownership transfer capability
+    logger.info("🧪 Testing ownership transfer capability...")
+    ownership_test_passed = test_ownership_transfer()
+    
+    if ownership_test_passed:
+        logger.info("✅ OWNERSHIP TRANSFER WORKING - Files will use your personal Gmail quota (15GB)!")
+    else:
+        logger.warning("⚠️ OWNERSHIP TRANSFER NOT WORKING - Files will use service account quota (limited)!")
+        logger.warning("⚠️ Uploads may fail due to quota limitations!")
     
     logger.info("✅ Application startup complete!")
 

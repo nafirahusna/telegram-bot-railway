@@ -1,4 +1,4 @@
-# app.py - Simple Stable Version with Ownership Transfer
+# app.py - Updated with OAuth Support
 import os
 import logging
 import asyncio
@@ -15,12 +15,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8284891962:AAHbRY1FB23MIh4TZ8qeSh6CXQ35XKH_XjQ")
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1bs_6iDuxgTX4QF_FTra3YDYVsRFatwRXLQ0tiQfNZyI")
+# Configuration from environment variables
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 
-if not BOT_TOKEN or not SPREADSHEET_ID:
-    logger.error("❌ BOT_TOKEN dan SPREADSHEET_ID harus di-set!")
+# Validate required environment variables
+if not BOT_TOKEN:
+    logger.error("❌ BOT_TOKEN environment variable is required!")
+    exit(1)
+
+if not SPREADSHEET_ID:
+    logger.error("❌ SPREADSHEET_ID environment variable is required!")
     exit(1)
 
 # Create Flask app
@@ -88,57 +93,67 @@ def initialize_bot():
         logger.error(f"❌ Error initializing bot: {e}")
         return False
 
-def test_ownership_transfer():
-    """Test ownership transfer capability synchronously"""
+def test_oauth_drive():
+    """Test OAuth Drive access"""
     if not bot or not bot.google_service:
-        logger.warning("⚠️ Bot or Google service not available for ownership test")
+        logger.warning("⚠️ Bot or Google service not available for OAuth test")
         return False
     
     try:
-        logger.info("🧪 Testing ownership transfer capability...")
-        test_result = bot.google_service.test_ownership_transfer()
+        logger.info("🧪 Testing OAuth Drive access...")
+        test_result = bot.google_service.test_oauth_drive_access()
         
         if test_result:
-            logger.info("✅ Ownership transfer test PASSED - files will use personal Gmail quota!")
+            logger.info("✅ OAuth Drive access test PASSED - photos will use personal Gmail quota!")
         else:
-            logger.warning("⚠️ Ownership transfer test FAILED - files will use service account quota")
-            logger.warning("⚠️ This may cause upload failures due to quota limits")
+            logger.warning("⚠️ OAuth Drive access test FAILED - photo uploads may not work")
         
         return test_result
         
     except Exception as e:
-        logger.error(f"❌ Error testing ownership transfer: {e}")
+        logger.error(f"❌ Error testing OAuth Drive: {e}")
         return False
 
 @app.route('/')
 def index():
-    # Get quota info if available
-    quota_info = {}
-    if bot and bot.google_service:
-        try:
-            quota_info = bot.google_service.get_quota_info() or {}
-        except:
-            pass
-    
-    return jsonify({
+    # Get system info
+    system_info = {
         'status': 'running',
         'bot_ready': bot_ready,
         'loop_running': loop is not None and not loop.is_closed(),
-        'message': 'Telegram Bot Webhook Server',
-        'quota_info': quota_info
-    })
+        'message': 'Telegram Bot with OAuth Drive & Service Account Sheets',
+        'services': {
+            'drive': 'oauth_personal_account',
+            'sheets': 'service_account'
+        }
+    }
+    
+    # Get quota info if available
+    if bot and bot.google_service:
+        try:
+            quota_info = bot.google_service.get_drive_quota_info()
+            if quota_info:
+                system_info['drive_quota'] = quota_info
+        except Exception as e:
+            logger.error(f"Error getting quota info: {e}")
+    
+    return jsonify(system_info)
 
 @app.route('/health')
 def health():
     return jsonify({
         'status': 'healthy' if bot_ready else 'initializing',
         'bot': 'ready' if bot_ready else 'not_ready',
-        'loop': 'running' if loop and not loop.is_closed() else 'not_running'
+        'loop': 'running' if loop and not loop.is_closed() else 'not_running',
+        'services': {
+            'drive_oauth': 'ready' if (bot and bot.google_service and bot.google_service.service_drive) else 'not_ready',
+            'sheets_service_account': 'ready' if (bot and bot.google_service and bot.google_service.service_sheets) else 'not_ready'
+        }
     })
 
-@app.route('/test-ownership')
-def test_ownership_endpoint():
-    """Test endpoint for ownership transfer"""
+@app.route('/test-oauth')
+def test_oauth_endpoint():
+    """Test endpoint for OAuth Drive access"""
     try:
         if not bot or not bot.google_service:
             return jsonify({
@@ -146,20 +161,25 @@ def test_ownership_endpoint():
                 'message': 'Bot or Google service not available'
             }), 503
         
-        test_result = test_ownership_transfer()
+        # Test OAuth Drive access
+        oauth_test = test_oauth_drive()
         
-        # Get usage info
-        usage_info = bot.google_service.get_service_account_usage()
+        # Get quota info
+        quota_info = bot.google_service.get_drive_quota_info()
+        
+        # Get service account info
+        service_account_info = bot.google_service.get_service_account_usage()
         
         return jsonify({
-            'status': 'success' if test_result else 'failed',
-            'ownership_transfer_working': test_result,
-            'service_account_usage': usage_info,
-            'message': 'Ownership transfer test completed'
+            'status': 'success' if oauth_test else 'failed',
+            'oauth_drive_working': oauth_test,
+            'quota_info': quota_info,
+            'service_account_info': service_account_info,
+            'message': 'OAuth Drive test completed'
         })
         
     except Exception as e:
-        logger.error(f"❌ Error in test ownership endpoint: {e}")
+        logger.error(f"❌ Error in OAuth test endpoint: {e}")
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -167,7 +187,7 @@ def test_ownership_endpoint():
 
 @app.route('/cleanup')
 def cleanup_endpoint():
-    """Cleanup endpoint for service account files"""
+    """Cleanup endpoint - now only for informational purposes"""
     try:
         if not bot or not bot.google_service:
             return jsonify({
@@ -175,11 +195,13 @@ def cleanup_endpoint():
                 'message': 'Bot or Google service not available'
             }), 503
         
+        # Since we're using OAuth for Drive, no cleanup needed
         cleanup_result = bot.google_service.cleanup_service_account_files()
         
         return jsonify({
-            'status': 'success' if cleanup_result else 'failed',
-            'message': 'Cleanup completed'
+            'status': 'success',
+            'message': 'No cleanup needed - using OAuth for Drive uploads',
+            'note': 'Service account only used for spreadsheet operations'
         })
         
     except Exception as e:
@@ -235,7 +257,7 @@ def webhook():
 def startup():
     global bot_ready
     
-    logger.info("🚀 Starting Telegram Bot Webhook Server...")
+    logger.info("🚀 Starting Telegram Bot with OAuth Drive + Service Account Sheets...")
     
     # Start event loop
     logger.info("⚡ Starting event loop...")
@@ -249,15 +271,15 @@ def startup():
         logger.error("❌ Failed to initialize bot")
         exit(1)
     
-    # Test ownership transfer capability
-    logger.info("🧪 Testing ownership transfer capability...")
-    ownership_test_passed = test_ownership_transfer()
+    # Test OAuth Drive capability
+    logger.info("🧪 Testing OAuth Drive access...")
+    oauth_test_passed = test_oauth_drive()
     
-    if ownership_test_passed:
-        logger.info("✅ OWNERSHIP TRANSFER WORKING - Files will use your personal Gmail quota (15GB)!")
+    if oauth_test_passed:
+        logger.info("✅ OAUTH DRIVE WORKING - Photos will use your personal Gmail quota (15GB)!")
     else:
-        logger.warning("⚠️ OWNERSHIP TRANSFER NOT WORKING - Files will use service account quota (limited)!")
-        logger.warning("⚠️ Uploads may fail due to quota limitations!")
+        logger.warning("⚠️ OAUTH DRIVE NOT WORKING - Photo uploads may fail!")
+        logger.warning("⚠️ Check OAuth credentials: OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REFRESH_TOKEN")
     
     logger.info("✅ Application startup complete!")
 

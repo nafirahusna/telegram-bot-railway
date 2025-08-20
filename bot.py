@@ -452,183 +452,223 @@ class TelegramBot:
             return ConversationHandler.END
 
     async def upload_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle photo upload state"""
-        user_id = update.effective_user.id
-        message_text = update.message.text
-        
-        # Handle pilihan metode upload
-        if message_text == "🔸 Upload Satu-Satu (Custom Nama)":
-            # Set mode upload satu-satu
-            context.user_data['upload_mode'] = 'single'
-            await update.message.reply_text(
-                "🔸 **Mode Upload Satu-Satu**\n\n"
-                "Kirimkan foto satu per satu. Setiap foto akan diminta deskripsi custom.\n\n"
-                "Kirimkan foto pertama:",
-                reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
-                ], resize_keyboard=True)
-            )
-            return UPLOAD_PHOTO
+            """Handle photo upload state - FIXED VERSION"""
+            user_id = update.effective_user.id
+            message_text = update.message.text
             
-        elif message_text == "📷 Upload Banyak (Auto Nama)":
-            # Set mode upload banyak
-            context.user_data['upload_mode'] = 'multiple'
-            await update.message.reply_text(
-                "📷 **Mode Upload Banyak**\n\n"
-                "Kirimkan beberapa foto sekaligus. Nama file akan otomatis: foto_1, foto_2, dst.\n\n"
-                "Kirimkan foto-foto Anda:",
-                reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
-                ], resize_keyboard=True)
-            )
-            return UPLOAD_PHOTO
-        
-        if message_text == "Selesai Upload":
-            # Reset upload mode
-            if 'upload_mode' in context.user_data:
-                del context.user_data['upload_mode']
-            
-            # Kembali ke konfirmasi data dengan info foto terbaru
-            session = self.session_service.get_session(user_id)
-            if not session:
-                await update.message.reply_text("❌ Session error. Silakan /start ulang.")
-                return ConversationHandler.END
-                
-            photo_info = ""
-            if session.get('photos'):
-                photo_info = f"\n📷 Foto Terupload: {len(session['photos'])} foto\n"
-                for i, photo in enumerate(session['photos'], 1):
-                    photo_info += f"   {i}. {photo['name']}\n"
-            else:
-                photo_info = "\n📷 Foto Eviden: Belum ada foto terupload\n"
-            
-            confirmation_text = (
-                f"✅ Konfirmasi Data Laporan\n\n"
-                f"Report Type: {session['data']['report_type']}\n"
-                f"ID Ticket: {session['data']['id_ticket']}\n"
-                f"Customer Name: {session['data']['customer_name']}\n"
-                f"Service No: {session['data']['service_no']}\n"
-                f"Segment: {session['data']['segment']}\n"
-                f"Teknisi 1: {session['data']['teknisi_1']}\n"
-                f"Teknisi 2: {session['data']['teknisi_2']}\n"
-                f"STO: {session['data']['sto']}\n"
-                f"Valins ID: {session['data']['valins_id']}"
-                f"{photo_info}\n"
-                f"Pilih tindakan:"
-            )
-            
-            keyboard = [
-                [KeyboardButton("✅ Kirim Laporan"), KeyboardButton("📝 Edit Data")],
-                [KeyboardButton("📷 Upload Foto Eviden"), KeyboardButton("❌ Batalkan")]
-            ]
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            
-            await update.message.reply_text(confirmation_text, reply_markup=reply_markup)
-            return CONFIRM_DATA
-        
-        elif message_text == "❌ Batalkan":
-            # Reset upload mode
-            if 'upload_mode' in context.user_data:
-                del context.user_data['upload_mode']
-            self.delete_folder_if_exists(user_id)
-            self.session_service.end_session(user_id)
-            await update.message.reply_text(
-                "❌ Laporan dibatalkan.",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
-            )
-            return ConversationHandler.END
-        
-        # Handle photo message
-        if update.message.photo:
-            upload_mode = context.user_data.get('upload_mode', 'single')
-            
-            if upload_mode == 'single':
-                # Mode upload satu-satu - minta deskripsi
-                photo = update.message.photo[-1]
-                context.user_data['temp_photo'] = photo
-                
+            # Handle pilihan metode upload
+            if message_text == "🔸 Upload Satu-Satu (Custom Nama)":
+                # Set mode upload satu-satu
+                context.user_data['upload_mode'] = 'single'
                 await update.message.reply_text(
-                    "📝 Masukkan deskripsi untuk foto ini (akan digunakan sebagai nama file):\n\n"
-                    "Contoh: 'foto_sebelum_perbaikan', 'hasil_instalasi', dll",
+                    "🔸 **Mode Upload Satu-Satu**\n\n"
+                    "Kirimkan foto satu per satu. Setiap foto akan diminta deskripsi custom.\n\n"
+                    "Kirimkan foto pertama:",
                     reply_markup=ReplyKeyboardMarkup([
-                        [KeyboardButton("❌ Batalkan")]
+                        [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
                     ], resize_keyboard=True)
                 )
-                return INPUT_PHOTO_DESC
+                return UPLOAD_PHOTO
+                
+            elif message_text == "📷 Upload Banyak (Auto Nama)":
+                # Set mode upload banyak
+                context.user_data['upload_mode'] = 'multiple'
+                await update.message.reply_text(
+                    "📷 **Mode Upload Banyak**\n\n"
+                    "Kirimkan beberapa foto sekaligus. Nama file akan otomatis: foto_1, foto_2, dst.\n\n"
+                    "Kirimkan foto-foto Anda:",
+                    reply_markup=ReplyKeyboardMarkup([
+                        [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
+                    ], resize_keyboard=True)
+                )
+                return UPLOAD_PHOTO
             
-            elif upload_mode == 'multiple':
-                # Mode upload banyak - langsung proses dengan nama auto
+            if message_text == "Selesai Upload":
+                # Reset upload mode
+                if 'upload_mode' in context.user_data:
+                    del context.user_data['upload_mode']
+                
+                # Kembali ke konfirmasi data dengan info foto terbaru
                 session = self.session_service.get_session(user_id)
-                if not session or not session.get('folder_id'):
-                    await update.message.reply_text(
-                        "❌ Session tidak valid. Silakan mulai ulang.",
-                        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
-                    )
+                if not session:
+                    await update.message.reply_text("❌ Session error. Silakan /start ulang.")
                     return ConversationHandler.END
+                    
+                photo_info = ""
+                if session.get('photos'):
+                    photo_info = f"\n📷 Foto Terupload: {len(session['photos'])} foto\n"
+                    for i, photo in enumerate(session['photos'], 1):
+                        photo_info += f"   {i}. {photo['name']}\n"
+                else:
+                    photo_info = "\n📷 Foto Eviden: Belum ada foto terupload\n"
                 
-                photo = update.message.photo[-1]
-                try:
-                    file = await context.bot.get_file(photo.file_id)
+                confirmation_text = (
+                    f"✅ Konfirmasi Data Laporan\n\n"
+                    f"Report Type: {session['data']['report_type']}\n"
+                    f"ID Ticket: {session['data']['id_ticket']}\n"
+                    f"Customer Name: {session['data']['customer_name']}\n"
+                    f"Service No: {session['data']['service_no']}\n"
+                    f"Segment: {session['data']['segment']}\n"
+                    f"Teknisi 1: {session['data']['teknisi_1']}\n"
+                    f"Teknisi 2: {session['data']['teknisi_2']}\n"
+                    f"STO: {session['data']['sto']}\n"
+                    f"Valins ID: {session['data']['valins_id']}"
+                    f"{photo_info}\n"
+                    f"Pilih tindakan:"
+                )
+                
+                keyboard = [
+                    [KeyboardButton("✅ Kirim Laporan"), KeyboardButton("📝 Edit Data")],
+                    [KeyboardButton("📷 Upload Foto Eviden"), KeyboardButton("❌ Batalkan")]
+                ]
+                reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                
+                await update.message.reply_text(confirmation_text, reply_markup=reply_markup)
+                return CONFIRM_DATA
+            
+            elif message_text == "❌ Batalkan":
+                # Reset upload mode
+                if 'upload_mode' in context.user_data:
+                    del context.user_data['upload_mode']
+                self.delete_folder_if_exists(user_id)
+                self.session_service.end_session(user_id)
+                await update.message.reply_text(
+                    "❌ Laporan dibatalkan.",
+                    reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
+                )
+                return ConversationHandler.END
+            
+            # Handle photo message
+            if update.message.photo:
+                upload_mode = context.user_data.get('upload_mode', 'single')
+                
+                if upload_mode == 'single':
+                    # Mode upload satu-satu - minta deskripsi
+                    photo = update.message.photo[-1]
+                    context.user_data['temp_photo'] = photo
                     
-                    # Generate nama otomatis
-                    photo_count = len(session.get('photos', [])) + 1
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"foto_{photo_count}_{timestamp}.jpg"
-                    filepath = f"temp_{filename}"
-                    
-                    await file.download_to_drive(filepath)
-                    
-                    file_id = self.google_service.upload_to_drive(filepath, filename, session['folder_id'])
-                    
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                    
-                    if file_id:
-                        # Initialize photos list if not exists
-                        if 'photos' not in session:
-                            session['photos'] = []
-                        
-                        # Tambahkan ke daftar foto
-                        session['photos'].append({
-                            'id': file_id,
-                            'name': filename
-                        })
-                        
-                        # Update session
-                        self.session_service.update_session(user_id, {'photos': session['photos']})
-                        
-                        await update.message.reply_text(
-                            f"✅ Foto '{filename}' berhasil diupload!\n\n"
-                            f"📷 Total foto terupload: {len(session['photos'])}\n\n"
-                            f"Kirim foto lain atau ketik 'Selesai Upload'."
-                        )
-                    else:
-                        await update.message.reply_text(
-                            "❌ Gagal mengupload foto. Silakan coba lagi."
-                        )
-                        
-                except Exception as e:
-                    logger.error(f"Error uploading photo: {e}")
                     await update.message.reply_text(
-                        "❌ Terjadi kesalahan saat mengupload foto. Silakan coba lagi."
+                        "📝 Masukkan deskripsi untuk foto ini (akan digunakan sebagai nama file):\n\n"
+                        "Contoh: 'foto_sebelum_perbaikan', 'hasil_instalasi', dll",
+                        reply_markup=ReplyKeyboardMarkup([
+                            [KeyboardButton("❌ Batalkan")]
+                        ], resize_keyboard=True)
                     )
+                    return INPUT_PHOTO_DESC
                 
-                return UPLOAD_PHOTO
-        else:
-            # Belum pilih mode upload
-            if 'upload_mode' not in context.user_data:
-                await update.message.reply_text(
-                    "Silakan pilih metode upload terlebih dahulu."
-                )
-                return UPLOAD_PHOTO
+                elif upload_mode == 'multiple':
+                    # Mode upload banyak - langsung proses dengan nama auto
+                    session = self.session_service.get_session(user_id)
+                    if not session or not session.get('folder_id'):
+                        await update.message.reply_text(
+                            "❌ Session tidak valid. Silakan mulai ulang.",
+                            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/start")]], resize_keyboard=True)
+                        )
+                        return ConversationHandler.END
+                    
+                    photo = update.message.photo[-1]
+                    
+                    # Send processing message
+                    processing_msg = await update.message.reply_text("⏳ Mengupload foto...")
+                    
+                    try:
+                        # Get file info
+                        file = await context.bot.get_file(photo.file_id)
+                        
+                        # Generate nama otomatis
+                        photo_count = len(session.get('photos', [])) + 1
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"foto_{photo_count}_{timestamp}.jpg"
+                        filepath = f"temp_{filename}"
+                        
+                        # Download file
+                        await file.download_to_drive(filepath)
+                        
+                        # Check if file was downloaded properly
+                        if not os.path.exists(filepath):
+                            raise Exception("File download failed")
+                        
+                        file_size = os.path.getsize(filepath)
+                        if file_size == 0:
+                            raise Exception("Downloaded file is empty")
+                        
+                        logger.info(f"📥 File downloaded: {filename} ({file_size} bytes)")
+                        
+                        # Upload to Drive using new strategy
+                        file_id = self.google_service.upload_to_drive(filepath, filename, session['folder_id'])
+                        
+                        # Clean up local file
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                        
+                        if file_id:
+                            # Initialize photos list if not exists
+                            if 'photos' not in session:
+                                session['photos'] = []
+                            
+                            # Tambahkan ke daftar foto
+                            session['photos'].append({
+                                'id': file_id,
+                                'name': filename
+                            })
+                            
+                            # Update session
+                            self.session_service.update_session(user_id, {'photos': session['photos']})
+                            
+                            # Update processing message with success
+                            await context.bot.edit_message_text(
+                                chat_id=update.effective_chat.id,
+                                message_id=processing_msg.message_id,
+                                text=f"✅ Foto '{filename}' berhasil diupload!\n\n"
+                                     f"📷 Total foto terupload: {len(session['photos'])}\n\n"
+                                     f"Kirim foto lain atau ketik 'Selesai Upload'."
+                            )
+                        else:
+                            # Update processing message with error
+                            await context.bot.edit_message_text(
+                                chat_id=update.effective_chat.id,
+                                message_id=processing_msg.message_id,
+                                text="❌ Gagal mengupload foto ke Drive. Silakan coba lagi."
+                            )
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error uploading photo: {e}")
+                        
+                        # Clean up local file if exists
+                        try:
+                            if os.path.exists(filepath):
+                                os.remove(filepath)
+                        except:
+                            pass
+                        
+                        # Update processing message with error
+                        try:
+                            await context.bot.edit_message_text(
+                                chat_id=update.effective_chat.id,
+                                message_id=processing_msg.message_id,
+                                text=f"❌ Terjadi kesalahan saat mengupload foto: {str(e)[:100]}...\n\nSilakan coba lagi."
+                            )
+                        except:
+                            await update.message.reply_text(
+                                "❌ Terjadi kesalahan saat mengupload foto. Silakan coba lagi."
+                            )
+                    
+                    return UPLOAD_PHOTO
             else:
-                await update.message.reply_text(
-                    "Silakan kirim foto atau pilih 'Selesai Upload' jika sudah selesai."
-                )
-                return UPLOAD_PHOTO
+                # Belum pilih mode upload
+                if 'upload_mode' not in context.user_data:
+                    await update.message.reply_text(
+                        "Silakan pilih metode upload terlebih dahulu."
+                    )
+                    return UPLOAD_PHOTO
+                else:
+                    await update.message.reply_text(
+                        "Silakan kirim foto atau pilih 'Selesai Upload' jika sudah selesai."
+                    )
+                    return UPLOAD_PHOTO
 
     async def input_photo_desc(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle photo description input"""
+        """Handle photo description input - FIXED VERSION"""
         user_id = update.effective_user.id
         description = update.message.text.strip()
         
@@ -649,6 +689,7 @@ class TelegramBot:
             return INPUT_PHOTO_DESC
         
         # Clean description untuk nama file
+        import re
         clean_desc = re.sub(r'[^\w\s-]', '', description).strip()
         clean_desc = re.sub(r'[\s]+', '_', clean_desc)
         
@@ -657,6 +698,9 @@ class TelegramBot:
         temp_photo = context.user_data.get('temp_photo')
         
         if temp_photo and session and session.get('folder_id'):
+            # Send processing message
+            processing_msg = await update.message.reply_text("⏳ Mengupload foto...")
+            
             try:
                 file = await context.bot.get_file(temp_photo.file_id)
                 
@@ -664,10 +708,23 @@ class TelegramBot:
                 filename = f"{clean_desc}_{timestamp}.jpg"
                 filepath = f"temp_{filename}"
                 
+                # Download file
                 await file.download_to_drive(filepath)
                 
+                # Check if file was downloaded properly
+                if not os.path.exists(filepath):
+                    raise Exception("File download failed")
+                
+                file_size = os.path.getsize(filepath)
+                if file_size == 0:
+                    raise Exception("Downloaded file is empty")
+                
+                logger.info(f"📥 File downloaded: {filename} ({file_size} bytes)")
+                
+                # Upload to Drive using new strategy
                 file_id = self.google_service.upload_to_drive(filepath, filename, session['folder_id'])
                 
+                # Clean up local file
                 if os.path.exists(filepath):
                     os.remove(filepath)
                 
@@ -685,33 +742,58 @@ class TelegramBot:
                     # Update session
                     self.session_service.update_session(user_id, {'photos': session['photos']})
                     
-                    await update.message.reply_text(
-                        f"✅ Foto '{filename}' berhasil diupload!\n\n"
-                        f"📷 Total foto terupload: {len(session['photos'])}\n\n"
-                        f"Kirim foto lain atau ketik 'Selesai Upload'.",
-                        reply_markup=ReplyKeyboardMarkup([
-                            [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
-                        ], resize_keyboard=True)
+                    # Update processing message with success
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=processing_msg.message_id,
+                        text=f"✅ Foto '{filename}' berhasil diupload!\n\n"
+                             f"📷 Total foto terupload: {len(session['photos'])}\n\n"
+                             f"Kirim foto lain atau ketik 'Selesai Upload'."
                     )
+                    
+                    # Clear temp photo
+                    if 'temp_photo' in context.user_data:
+                        del context.user_data['temp_photo']
+                    
+                    return UPLOAD_PHOTO
+                    
                 else:
-                    await update.message.reply_text(
-                        "❌ Gagal mengupload foto. Silakan coba lagi.",
-                        reply_markup=ReplyKeyboardMarkup([
-                            [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
-                        ], resize_keyboard=True)
+                    # Update processing message with error
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=processing_msg.message_id,
+                        text="❌ Gagal mengupload foto ke Drive. Silakan coba lagi."
                     )
+                    
             except Exception as e:
-                logger.error(f"Error uploading photo: {e}")
-                await update.message.reply_text(
-                    "❌ Terjadi kesalahan saat mengupload foto. Silakan coba lagi.",
-                    reply_markup=ReplyKeyboardMarkup([
-                        [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
-                    ], resize_keyboard=True)
+                logger.error(f"❌ Error uploading photo: {e}")
+                
+                # Clean up local file if exists
+                try:
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                except:
+                    pass
+                
+                # Update processing message with error
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=processing_msg.message_id,
+                        text=f"❌ Terjadi kesalahan: {str(e)[:100]}...\n\nSilakan coba lagi."
+                    )
+                except:
+                    await update.message.reply_text(
+                        "❌ Terjadi kesalahan saat mengupload foto. Silakan coba lagi."
                     )
         
-        # Clear temp photo
-        if 'temp_photo' in context.user_data:
-            del context.user_data['temp_photo']
+        # Keep the reply markup for continuing uploads
+        await update.message.reply_text(
+            "Kirimkan foto lain atau ketik 'Selesai Upload'.",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("Selesai Upload"), KeyboardButton("❌ Batalkan")]
+            ], resize_keyboard=True)
+        )
         
         return UPLOAD_PHOTO
 

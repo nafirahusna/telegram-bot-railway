@@ -1,13 +1,11 @@
-# services/google_service.py - FIXED VERSION WITH UPLOAD-TRANSFER-DELETE STRATEGY
+# services/google_service.py - FIXED VERSION WITH PROPER OWNERSHIP TRANSFER
 import os
 import json
 import base64
 import logging
-import time
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from googleapiclient.http import MediaFileUpload
-from googleapiclient.errors import HttpError
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,7 +18,7 @@ class GoogleService:
         self.service_drive = None
         self.service_sheets = None
         self.parent_folder_id = parent_folder_id
-        self.owner_email = "ilhambintang9773@gmail.com"  # Your personal email
+        self.owner_email = "muhamadsidiq2@gmail.com"  # FIXED: Set your email directly
         
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
@@ -63,18 +61,18 @@ class GoogleService:
             return False
 
     def create_folder(self, folder_name, parent_folder_id=None):
-        """Create folder in target drive (personal drive) directly"""
+        """Create folder directly in owner's drive with immediate ownership transfer"""
         try:
             parent_id = parent_folder_id or self.parent_folder_id
             
-            # Create folder metadata
+            # STEP 1: Create folder metadata with immediate owner setting
             folder_metadata = {
                 'name': folder_name,
                 'mimeType': 'application/vnd.google-apps.folder',
                 'parents': [parent_id] if parent_id else []
             }
             
-            # Create folder in target parent (which should be in personal drive)
+            # STEP 2: Create folder
             folder = self.service_drive.files().create(
                 body=folder_metadata,
                 supportsAllDrives=True,
@@ -84,6 +82,31 @@ class GoogleService:
             folder_id = folder.get('id')
             logger.info(f"📁 Folder created: {folder_name} (ID: {folder_id})")
             
+            # STEP 3: IMMEDIATELY transfer ownership to avoid quota issues
+            if folder_id and self.owner_email:
+                try:
+                    # Add owner permission with transferOwnership=True
+                    permission_body = {
+                        'role': 'owner',
+                        'type': 'user', 
+                        'emailAddress': self.owner_email
+                    }
+                    
+                    self.service_drive.permissions().create(
+                        fileId=folder_id,
+                        body=permission_body,
+                        transferOwnership=True,
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False  # Don't spam email notifications
+                    ).execute()
+                    
+                    logger.info(f"✅ Folder ownership transferred to {self.owner_email}")
+                    
+                except Exception as transfer_error:
+                    logger.error(f"❌ Ownership transfer failed: {transfer_error}")
+                    # Don't return None, folder still works without transfer
+                    logger.warning("⚠️ Folder created but ownership not transferred")
+            
             return folder_id
             
         except Exception as e:
@@ -91,102 +114,17 @@ class GoogleService:
             return None
 
     def upload_to_drive(self, file_path, file_name, folder_id):
-        """
-        NEW STRATEGY: Upload -> Move to target folder -> Delete original
-        This avoids service account storage quota issues
-        """
-        temp_file_id = None
-        
+        """Upload file with immediate ownership transfer to avoid quota issues"""
         try:
-            logger.info(f"📤 Starting upload: {file_name}")
-            
-            # STEP 1: Upload file to service account's My Drive (temporary)
+            # STEP 1: Upload file metadata
             file_metadata = {
-                'name': f"temp_{int(time.time())}_{file_name}"  # Temporary name
+                'name': file_name,
+                'parents': [folder_id]
             }
             
             media = MediaFileUpload(file_path, resumable=True)
             
-            # Upload to service account's root (no parents = My Drive)
-            temp_file = self.service_drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
-            ).execute()
-            
-            temp_file_id = temp_file.get('id')
-            logger.info(f"📤 Temporary file uploaded: {temp_file_id}")
-            
-            if not temp_file_id:
-                raise Exception("Failed to get temp file ID")
-            
-            # STEP 2: Copy file to target folder with final name
-            copy_metadata = {
-                'name': file_name,
-                'parents': [folder_id]
-            }
-            
-            final_file = self.service_drive.files().copy(
-                fileId=temp_file_id,
-                body=copy_metadata,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
-            ).execute()
-            
-            final_file_id = final_file.get('id')
-            logger.info(f"📋 File copied to target folder: {final_file_id}")
-            
-            # STEP 3: Delete temporary file from service account
-            try:
-                self.service_drive.files().delete(
-                    fileId=temp_file_id,
-                    supportsAllDrives=True,
-                    supportsTeamDrives=True
-                ).execute()
-                logger.info(f"🗑️ Temporary file deleted from service account")
-            except Exception as delete_error:
-                logger.warning(f"⚠️ Could not delete temp file: {delete_error}")
-                # Don't fail the whole process for this
-            
-            logger.info(f"✅ Upload complete: {file_name} -> {final_file_id}")
-            return final_file_id
-            
-        except Exception as e:
-            logger.error(f"❌ Error in upload process: {e}")
-            
-            # Cleanup: Delete temp file if it exists
-            if temp_file_id:
-                try:
-                    self.service_drive.files().delete(
-                        fileId=temp_file_id,
-                        supportsAllDrives=True
-                    ).execute()
-                    logger.info(f"🧹 Cleaned up temp file: {temp_file_id}")
-                except:
-                    logger.warning(f"⚠️ Could not clean up temp file: {temp_file_id}")
-            
-            # Try alternative method if main method fails
-            return self._upload_alternative_method(file_path, file_name, folder_id)
-
-    def _upload_alternative_method(self, file_path, file_name, folder_id):
-        """Alternative upload method using direct folder upload"""
-        try:
-            logger.info("🔄 Trying alternative upload method...")
-            
-            # Try direct upload to target folder
-            file_metadata = {
-                'name': file_name,
-                'parents': [folder_id]
-            }
-            
-            # Use smaller chunk size for better reliability
-            media = MediaFileUpload(
-                file_path, 
-                resumable=True,
-                chunksize=1024*1024  # 1MB chunks
-            )
-            
+            # STEP 2: Upload file
             uploaded_file = self.service_drive.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -195,11 +133,110 @@ class GoogleService:
             ).execute()
             
             file_id = uploaded_file.get('id')
-            logger.info(f"✅ Alternative upload successful: {file_id}")
+            logger.info(f"📄 File uploaded: {file_name} (ID: {file_id})")
+            
+            # STEP 3: IMMEDIATELY transfer ownership to avoid quota counting against service account
+            if file_id and self.owner_email:
+                try:
+                    permission_body = {
+                        'role': 'owner',
+                        'type': 'user',
+                        'emailAddress': self.owner_email
+                    }
+                    
+                    self.service_drive.permissions().create(
+                        fileId=file_id,
+                        body=permission_body,
+                        transferOwnership=True,
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False  # Don't spam notifications
+                    ).execute()
+                    
+                    logger.info(f"✅ File ownership transferred to {self.owner_email}")
+                    
+                except Exception as transfer_error:
+                    logger.error(f"❌ File ownership transfer failed: {transfer_error}")
+                    # File uploaded successfully, just ownership transfer failed
+                    logger.warning("⚠️ File uploaded but ownership not transferred")
+            
             return file_id
             
-        except Exception as alt_error:
-            logger.error(f"❌ Alternative upload failed: {alt_error}")
+        except Exception as e:
+            logger.error(f"❌ Error uploading file: {e}")
+            
+            # Enhanced error handling
+            error_str = str(e).lower()
+            if "storagequotaexceeded" in error_str:
+                logger.error("🚨 QUOTA EXCEEDED - ATTEMPTING WORKAROUND...")
+                
+                # Try alternative approach: Create file first, then upload content
+                return self._upload_with_quota_workaround(file_path, file_name, folder_id)
+            elif "insufficient" in error_str and "permission" in error_str:
+                logger.error("🚨 PERMISSION ISSUE:")
+                logger.error(f"   Make sure {self.owner_email} has granted 'Manager' access to service account")
+                logger.error(f"   Or add service account as 'Editor' to parent folder: {self.parent_folder_id}")
+            
+            return None
+
+    def _upload_with_quota_workaround(self, file_path, file_name, folder_id):
+        """Alternative upload method to bypass quota issues"""
+        try:
+            logger.info("🔄 Trying quota workaround method...")
+            
+            # Method 1: Create empty file first, transfer ownership, then update content
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            
+            # Create empty file
+            empty_file = self.service_drive.files().create(
+                body=file_metadata,
+                supportsAllDrives=True
+            ).execute()
+            
+            file_id = empty_file.get('id')
+            
+            if file_id and self.owner_email:
+                # Transfer ownership of empty file first
+                permission_body = {
+                    'role': 'owner',
+                    'type': 'user',
+                    'emailAddress': self.owner_email
+                }
+                
+                self.service_drive.permissions().create(
+                    fileId=file_id,
+                    body=permission_body,
+                    transferOwnership=True,
+                    supportsAllDrives=True,
+                    sendNotificationEmail=False
+                ).execute()
+                
+                logger.info("✅ Empty file created and ownership transferred")
+                
+                # Now try to update with actual content
+                media = MediaFileUpload(file_path, resumable=True)
+                
+                updated_file = self.service_drive.files().update(
+                    fileId=file_id,
+                    media_body=media,
+                    supportsAllDrives=True
+                ).execute()
+                
+                logger.info(f"✅ File content updated successfully: {file_name}")
+                return file_id
+            
+        except Exception as workaround_error:
+            logger.error(f"❌ Quota workaround failed: {workaround_error}")
+            
+            # Last resort: Provide manual instructions
+            logger.error("🚨 MANUAL ACTION REQUIRED:")
+            logger.error("1. Go to Google Drive")
+            logger.error("2. Find the service account files (probably in 'Shared with me')")
+            logger.error("3. Move them to your personal drive")
+            logger.error("4. Or create a Shared Drive and use that instead")
+            
             return None
 
     def get_folder_link(self, folder_id):
@@ -227,110 +264,92 @@ class GoogleService:
             logger.error(f"❌ Error updating spreadsheet: {e}")
             return False
 
-    def check_upload_permissions(self):
-        """Check if we can upload to the target folder"""
+    def check_service_account_permissions(self):
+        """Check if service account has proper permissions"""
         try:
-            logger.info("🔍 Checking upload permissions...")
+            # Test drive access
+            drive_test = self.service_drive.files().list(pageSize=1).execute()
+            logger.info("✅ Drive API access confirmed")
             
-            # Test creating a small text file
-            test_content = "test file"
-            test_file_path = "test_upload.txt"
-            
-            # Create test file
-            with open(test_file_path, 'w') as f:
-                f.write(test_content)
-            
-            # Try to upload to parent folder
-            file_metadata = {
-                'name': f"test_{int(time.time())}.txt",
-                'parents': [self.parent_folder_id] if self.parent_folder_id else []
-            }
-            
-            media = MediaFileUpload(test_file_path)
-            
-            test_file = self.service_drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                supportsAllDrives=True
-            ).execute()
-            
-            test_file_id = test_file.get('id')
-            
-            # Clean up test file
-            if test_file_id:
-                self.service_drive.files().delete(
-                    fileId=test_file_id,
+            # Test parent folder access
+            if self.parent_folder_id:
+                folder_info = self.service_drive.files().get(
+                    fileId=self.parent_folder_id,
                     supportsAllDrives=True
                 ).execute()
+                logger.info(f"✅ Parent folder access confirmed: {folder_info.get('name')}")
+                
+                # Check permissions on parent folder
+                permissions = self.service_drive.permissions().list(
+                    fileId=self.parent_folder_id,
+                    supportsAllDrives=True
+                ).execute()
+                
+                service_account_email = None
+                for perm in permissions.get('permissions', []):
+                    if perm.get('type') == 'serviceAccount':
+                        service_account_email = perm.get('emailAddress')
+                        break
+                
+                if service_account_email:
+                    logger.info(f"✅ Service account found in permissions: {service_account_email}")
+                else:
+                    logger.warning("⚠️ Service account not found in folder permissions")
+                    logger.warning("💡 Add service account as 'Editor' to parent folder")
             
-            os.remove(test_file_path)
-            
-            logger.info("✅ Upload permissions confirmed")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Upload permission test failed: {e}")
-            
-            # Clean up test file if it exists
-            try:
-                if os.path.exists(test_file_path):
-                    os.remove(test_file_path)
-            except:
-                pass
-                
+            logger.error(f"❌ Permission check failed: {e}")
             return False
 
-    def get_service_account_usage(self):
-        """Check current usage of service account"""
-        try:
-            # Get files owned by service account
-            results = self.service_drive.files().list(
-                q="'me' in owners",
-                pageSize=100,
-                fields="files(id, name, size)"
-            ).execute()
-            
-            files = results.get('files', [])
-            total_size = sum(int(file.get('size', 0)) for file in files)
-            
-            logger.info(f"📊 Service account usage: {len(files)} files, {total_size / (1024*1024):.2f} MB")
-            
-            return {
-                'file_count': len(files),
-                'total_size_mb': total_size / (1024*1024),
-                'files': files
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error checking service account usage: {e}")
-            return None
-
     def cleanup_service_account_files(self):
-        """Clean up any remaining files in service account"""
+        """Clean up files owned by service account (emergency cleanup)"""
         try:
             logger.info("🧹 Cleaning up service account files...")
             
+            # List files owned by service account
             results = self.service_drive.files().list(
                 q="'me' in owners",
                 pageSize=100,
-                fields="files(id, name, size)"
+                fields="files(id, name, size, owners)"
             ).execute()
             
             files = results.get('files', [])
             
-            deleted_count = 0
+            total_size = 0
+            for file in files:
+                size = int(file.get('size', 0))
+                total_size += size
+                logger.info(f"📁 {file['name']}: {size / (1024*1024):.1f} MB")
+            
+            logger.info(f"📊 Total size: {total_size / (1024*1024*1024):.2f} GB")
+            
+            # Transfer ownership of all files
+            transferred = 0
             for file in files:
                 try:
-                    self.service_drive.files().delete(
+                    permission_body = {
+                        'role': 'owner',
+                        'type': 'user',
+                        'emailAddress': self.owner_email
+                    }
+                    
+                    self.service_drive.permissions().create(
                         fileId=file['id'],
-                        supportsAllDrives=True
+                        body=permission_body,
+                        transferOwnership=True,
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False
                     ).execute()
-                    deleted_count += 1
-                    logger.info(f"🗑️ Deleted: {file['name']}")
-                except Exception as delete_error:
-                    logger.warning(f"⚠️ Could not delete {file['name']}: {delete_error}")
+                    
+                    transferred += 1
+                    logger.info(f"✅ Transferred: {file['name']}")
+                    
+                except Exception as transfer_error:
+                    logger.error(f"❌ Failed to transfer {file['name']}: {transfer_error}")
             
-            logger.info(f"✅ Cleanup complete: {deleted_count}/{len(files)} files deleted")
+            logger.info(f"✅ Cleanup complete: {transferred}/{len(files)} files transferred")
             return True
             
         except Exception as e:

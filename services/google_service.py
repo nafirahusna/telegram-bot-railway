@@ -1,4 +1,4 @@
-# services/google_service.py - FIXED VERSION WITH UPLOAD-TRANSFER-DELETE STRATEGY
+# services/google_service.py - FIXED VERSION WITH OWNERSHIP TRANSFER
 import os
 import json
 import base64
@@ -20,7 +20,7 @@ class GoogleService:
         self.service_drive = None
         self.service_sheets = None
         self.parent_folder_id = parent_folder_id
-        self.owner_email = "ilhambintang9773@gmail.com"  # Your personal email
+        self.owner_email = "ilhambintang9773@gmail.com"  # Your personal Gmail
         
     def authenticate(self):
         """Authenticate with Google APIs using service account"""
@@ -90,24 +90,54 @@ class GoogleService:
             logger.error(f"❌ Error creating folder: {e}")
             return None
 
+    def transfer_ownership(self, file_id, owner_email):
+        """Transfer file ownership to personal Gmail account"""
+        try:
+            logger.info(f"🔄 Transferring ownership of {file_id} to {owner_email}")
+            
+            # Create permission for ownership transfer
+            permission = {
+                'role': 'owner',
+                'type': 'user',
+                'emailAddress': owner_email
+            }
+            
+            # Transfer ownership
+            self.service_drive.permissions().create(
+                fileId=file_id,
+                body=permission,
+                transferOwnership=True,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
+            
+            logger.info(f"✅ Ownership transferred successfully to {owner_email}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error transferring ownership: {e}")
+            return False
+
     def upload_to_drive(self, file_path, file_name, folder_id):
         """
-        NEW STRATEGY: Upload -> Move to target folder -> Delete original
-        This avoids service account storage quota issues
+        NEW STRATEGY: Upload -> Transfer Ownership -> Move to folder
+        This ensures files are owned by your personal Gmail (with 15GB quota)
         """
         temp_file_id = None
         
         try:
-            logger.info(f"📤 Starting upload: {file_name}")
+            logger.info(f"📤 Starting upload with ownership transfer: {file_name}")
             
             # STEP 1: Upload file to service account's My Drive (temporary)
+            temp_name = f"temp_{int(time.time())}_{file_name}"
             file_metadata = {
-                'name': f"temp_{int(time.time())}_{file_name}"  # Temporary name
+                'name': temp_name
+                # No parents = uploads to service account's My Drive
             }
             
             media = MediaFileUpload(file_path, resumable=True)
             
-            # Upload to service account's root (no parents = My Drive)
+            # Upload to service account's root
             temp_file = self.service_drive.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -121,35 +151,66 @@ class GoogleService:
             if not temp_file_id:
                 raise Exception("Failed to get temp file ID")
             
-            # STEP 2: Copy file to target folder with final name
-            copy_metadata = {
+            # STEP 2: Transfer ownership to your personal Gmail
+            logger.info(f"🔄 Transferring ownership to {self.owner_email}...")
+            
+            ownership_transferred = self.transfer_ownership(temp_file_id, self.owner_email)
+            
+            if not ownership_transferred:
+                logger.warning("⚠️ Ownership transfer failed, proceeding with copy method")
+                # Fallback: copy to target folder and delete temp
+                return self._copy_and_cleanup(temp_file_id, file_name, folder_id)
+            
+            # STEP 3: Move file to target folder and rename
+            logger.info(f"📋 Moving file to target folder...")
+            
+            # Update file: move to folder and rename
+            update_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
             
-            final_file = self.service_drive.files().copy(
+            # Remove from current parents (service account's My Drive)
+            file_info = self.service_drive.files().get(
                 fileId=temp_file_id,
-                body=copy_metadata,
+                fields='parents',
+                supportsAllDrives=True
+            ).execute()
+            
+            previous_parents = ",".join(file_info.get('parents', []))
+            
+            # Move file
+            moved_file = self.service_drive.files().update(
+                fileId=temp_file_id,
+                body=update_metadata,
+                addParents=folder_id,
+                removeParents=previous_parents,
                 supportsAllDrives=True,
                 supportsTeamDrives=True
             ).execute()
             
-            final_file_id = final_file.get('id')
-            logger.info(f"📋 File copied to target folder: {final_file_id}")
+            final_file_id = moved_file.get('id')
+            logger.info(f"✅ File moved and renamed successfully: {final_file_id}")
             
-            # STEP 3: Delete temporary file from service account
+            # STEP 4: Verify ownership transfer worked
             try:
-                self.service_drive.files().delete(
-                    fileId=temp_file_id,
-                    supportsAllDrives=True,
-                    supportsTeamDrives=True
+                file_details = self.service_drive.files().get(
+                    fileId=final_file_id,
+                    fields='owners',
+                    supportsAllDrives=True
                 ).execute()
-                logger.info(f"🗑️ Temporary file deleted from service account")
-            except Exception as delete_error:
-                logger.warning(f"⚠️ Could not delete temp file: {delete_error}")
-                # Don't fail the whole process for this
+                
+                owners = file_details.get('owners', [])
+                is_owned_by_personal = any(owner.get('emailAddress') == self.owner_email for owner in owners)
+                
+                if is_owned_by_personal:
+                    logger.info(f"✅ Ownership confirmed: File owned by {self.owner_email}")
+                else:
+                    logger.warning(f"⚠️ Ownership verification failed")
+                    
+            except Exception as verify_error:
+                logger.warning(f"⚠️ Could not verify ownership: {verify_error}")
             
-            logger.info(f"✅ Upload complete: {file_name} -> {final_file_id}")
             return final_file_id
             
         except Exception as e:
@@ -163,16 +224,53 @@ class GoogleService:
                         supportsAllDrives=True
                     ).execute()
                     logger.info(f"🧹 Cleaned up temp file: {temp_file_id}")
-                except:
-                    logger.warning(f"⚠️ Could not clean up temp file: {temp_file_id}")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ Could not clean up temp file: {cleanup_error}")
             
-            # Try alternative method if main method fails
-            return self._upload_alternative_method(file_path, file_name, folder_id)
+            # Try fallback method
+            return self._upload_fallback_method(file_path, file_name, folder_id)
 
-    def _upload_alternative_method(self, file_path, file_name, folder_id):
-        """Alternative upload method using direct folder upload"""
+    def _copy_and_cleanup(self, temp_file_id, file_name, folder_id):
+        """Fallback: Copy to target folder and cleanup temp file"""
         try:
-            logger.info("🔄 Trying alternative upload method...")
+            logger.info("🔄 Using copy and cleanup fallback method...")
+            
+            # Copy to target folder
+            copy_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            
+            copied_file = self.service_drive.files().copy(
+                fileId=temp_file_id,
+                body=copy_metadata,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
+            
+            final_file_id = copied_file.get('id')
+            
+            # Delete temp file
+            try:
+                self.service_drive.files().delete(
+                    fileId=temp_file_id,
+                    supportsAllDrives=True
+                ).execute()
+                logger.info(f"🗑️ Temp file deleted")
+            except Exception as delete_error:
+                logger.warning(f"⚠️ Could not delete temp file: {delete_error}")
+            
+            logger.info(f"✅ Copy and cleanup successful: {final_file_id}")
+            return final_file_id
+            
+        except Exception as e:
+            logger.error(f"❌ Copy and cleanup failed: {e}")
+            return None
+
+    def _upload_fallback_method(self, file_path, file_name, folder_id):
+        """Final fallback: Direct upload to target folder"""
+        try:
+            logger.info("🔄 Using direct upload fallback method...")
             
             # Try direct upload to target folder
             file_metadata = {
@@ -195,11 +293,20 @@ class GoogleService:
             ).execute()
             
             file_id = uploaded_file.get('id')
-            logger.info(f"✅ Alternative upload successful: {file_id}")
+            
+            # Try to transfer ownership even in fallback
+            if file_id:
+                try:
+                    self.transfer_ownership(file_id, self.owner_email)
+                    logger.info(f"✅ Fallback upload with ownership transfer: {file_id}")
+                except Exception as transfer_error:
+                    logger.warning(f"⚠️ Ownership transfer failed in fallback: {transfer_error}")
+                    logger.info(f"✅ Fallback upload successful (no ownership transfer): {file_id}")
+            
             return file_id
             
         except Exception as alt_error:
-            logger.error(f"❌ Alternative upload failed: {alt_error}")
+            logger.error(f"❌ All upload methods failed: {alt_error}")
             return None
 
     def get_folder_link(self, folder_id):
@@ -227,23 +334,21 @@ class GoogleService:
             logger.error(f"❌ Error updating spreadsheet: {e}")
             return False
 
-    def check_upload_permissions(self):
-        """Check if we can upload to the target folder"""
+    def test_ownership_transfer(self):
+        """Test ownership transfer functionality"""
         try:
-            logger.info("🔍 Checking upload permissions...")
-            
-            # Test creating a small text file
-            test_content = "test file"
-            test_file_path = "test_upload.txt"
+            logger.info("🧪 Testing ownership transfer...")
             
             # Create test file
+            test_content = f"Test file created at {datetime.now()}"
+            test_file_path = "test_ownership.txt"
+            
             with open(test_file_path, 'w') as f:
                 f.write(test_content)
             
-            # Try to upload to parent folder
+            # Upload test file
             file_metadata = {
-                'name': f"test_{int(time.time())}.txt",
-                'parents': [self.parent_folder_id] if self.parent_folder_id else []
+                'name': f"ownership_test_{int(time.time())}.txt"
             }
             
             media = MediaFileUpload(test_file_path)
@@ -255,21 +360,45 @@ class GoogleService:
             ).execute()
             
             test_file_id = test_file.get('id')
+            logger.info(f"📤 Test file uploaded: {test_file_id}")
             
-            # Clean up test file
+            # Try ownership transfer
             if test_file_id:
-                self.service_drive.files().delete(
-                    fileId=test_file_id,
-                    supportsAllDrives=True
-                ).execute()
+                transfer_success = self.transfer_ownership(test_file_id, self.owner_email)
+                
+                if transfer_success:
+                    logger.info("✅ Ownership transfer test PASSED")
+                    
+                    # Clean up - delete test file
+                    try:
+                        self.service_drive.files().delete(
+                            fileId=test_file_id,
+                            supportsAllDrives=True
+                        ).execute()
+                        logger.info("🧹 Test file cleaned up")
+                    except Exception as cleanup_error:
+                        logger.warning(f"⚠️ Could not cleanup test file: {cleanup_error}")
+                        
+                else:
+                    logger.error("❌ Ownership transfer test FAILED")
+                    
+                    # Still try to clean up
+                    try:
+                        self.service_drive.files().delete(
+                            fileId=test_file_id,
+                            supportsAllDrives=True
+                        ).execute()
+                    except:
+                        pass
             
-            os.remove(test_file_path)
+            # Clean up local test file
+            if os.path.exists(test_file_path):
+                os.remove(test_file_path)
             
-            logger.info("✅ Upload permissions confirmed")
-            return True
+            return transfer_success if test_file_id else False
             
         except Exception as e:
-            logger.error(f"❌ Upload permission test failed: {e}")
+            logger.error(f"❌ Ownership transfer test failed: {e}")
             
             # Clean up test file if it exists
             try:
@@ -280,6 +409,25 @@ class GoogleService:
                 
             return False
 
+    def check_upload_permissions(self):
+        """Check if we can upload and transfer ownership"""
+        try:
+            logger.info("🔍 Checking upload permissions and ownership transfer...")
+            
+            # Test both upload and ownership transfer
+            upload_test = self.test_ownership_transfer()
+            
+            if upload_test:
+                logger.info("✅ Upload permissions and ownership transfer confirmed")
+                return True
+            else:
+                logger.warning("⚠️ Upload or ownership transfer test failed")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Permission check failed: {e}")
+            return False
+
     def get_service_account_usage(self):
         """Check current usage of service account"""
         try:
@@ -287,7 +435,7 @@ class GoogleService:
             results = self.service_drive.files().list(
                 q="'me' in owners",
                 pageSize=100,
-                fields="files(id, name, size)"
+                fields="files(id, name, size, owners)"
             ).execute()
             
             files = results.get('files', [])
@@ -295,9 +443,25 @@ class GoogleService:
             
             logger.info(f"📊 Service account usage: {len(files)} files, {total_size / (1024*1024):.2f} MB")
             
+            # Count files owned by service account vs personal account
+            service_owned = []
+            personal_owned = []
+            
+            for file in files:
+                owners = file.get('owners', [])
+                if any(owner.get('emailAddress') == self.owner_email for owner in owners):
+                    personal_owned.append(file)
+                else:
+                    service_owned.append(file)
+            
+            logger.info(f"📊 Service account owned: {len(service_owned)} files")
+            logger.info(f"📊 Personal account owned: {len(personal_owned)} files")
+            
             return {
                 'file_count': len(files),
                 'total_size_mb': total_size / (1024*1024),
+                'service_owned_count': len(service_owned),
+                'personal_owned_count': len(personal_owned),
                 'files': files
             }
             
@@ -306,33 +470,68 @@ class GoogleService:
             return None
 
     def cleanup_service_account_files(self):
-        """Clean up any remaining files in service account"""
+        """Clean up any remaining files in service account (owned by service account only)"""
         try:
-            logger.info("🧹 Cleaning up service account files...")
+            logger.info("🧹 Cleaning up service account owned files...")
             
+            # Get files owned by service account only
             results = self.service_drive.files().list(
                 q="'me' in owners",
                 pageSize=100,
-                fields="files(id, name, size)"
+                fields="files(id, name, size, owners)"
             ).execute()
             
             files = results.get('files', [])
-            
             deleted_count = 0
+            
             for file in files:
                 try:
-                    self.service_drive.files().delete(
-                        fileId=file['id'],
-                        supportsAllDrives=True
-                    ).execute()
-                    deleted_count += 1
-                    logger.info(f"🗑️ Deleted: {file['name']}")
+                    # Check if file is owned by service account (not transferred)
+                    owners = file.get('owners', [])
+                    is_service_owned = not any(owner.get('emailAddress') == self.owner_email for owner in owners)
+                    
+                    if is_service_owned:
+                        self.service_drive.files().delete(
+                            fileId=file['id'],
+                            supportsAllDrives=True
+                        ).execute()
+                        deleted_count += 1
+                        logger.info(f"🗑️ Deleted service-owned file: {file['name']}")
+                    else:
+                        logger.info(f"⏭️ Skipping personal-owned file: {file['name']}")
+                        
                 except Exception as delete_error:
                     logger.warning(f"⚠️ Could not delete {file['name']}: {delete_error}")
             
-            logger.info(f"✅ Cleanup complete: {deleted_count}/{len(files)} files deleted")
+            logger.info(f"✅ Cleanup complete: {deleted_count}/{len(files)} service-owned files deleted")
             return True
             
         except Exception as e:
             logger.error(f"❌ Cleanup failed: {e}")
             return False
+
+    def get_quota_info(self):
+        """Get quota information for debugging"""
+        try:
+            # Get about info
+            about = self.service_drive.about().get(fields='storageQuota').execute()
+            quota = about.get('storageQuota', {})
+            
+            usage = int(quota.get('usage', 0))
+            limit = int(quota.get('limit', 0))
+            
+            usage_mb = usage / (1024*1024)
+            limit_gb = limit / (1024*1024*1024) if limit > 0 else 0
+            
+            logger.info(f"📊 Quota info: {usage_mb:.2f} MB used / {limit_gb:.2f} GB limit")
+            
+            return {
+                'usage_mb': usage_mb,
+                'limit_gb': limit_gb,
+                'usage_bytes': usage,
+                'limit_bytes': limit
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting quota info: {e}")
+            return None

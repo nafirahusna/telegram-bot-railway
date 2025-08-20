@@ -22,7 +22,7 @@ class GoogleService:
     def __init__(self):
         # Get environment variables with fallbacks
         self.parent_folder_id = os.environ.get('PARENT_FOLDER_ID', '12EU8I2sbhzxyHaiBhoC2xjJ4jTXpYJfY')
-        self.owner_email = os.environ.get('OWNER_EMAIL', 'muhamadsidiq2@gmail.com')
+        self.owner_email = os.environ.get('OWNER_EMAIL', 'ilhambintang9773@gmail.com')
         
         # OAuth credentials for Drive (photo uploads)
         self.oauth_client_id = os.environ.get('OAUTH_CLIENT_ID')

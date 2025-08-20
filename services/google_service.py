@@ -18,7 +18,7 @@ class GoogleService:
         self.service_drive = None
         self.service_sheets = None
         self.parent_folder_id = parent_folder_id
-        self.owner_email = "muhamadsidiq2@gmail.com"  # FIXED: Set your email directly
+        self.owner_email = "ilhambintang9773@gmail.com"  # FIXED: Set your email directly
         
     def authenticate(self):
         """Authenticate with Google APIs using service account"""

@@ -1,4 +1,4 @@
-# app.py - OAuth2 Version with Environment Variables
+# app.py - Simple Stable Version with Ownership Transfer
 import os
 import logging
 import asyncio
@@ -15,25 +15,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration dari environment variables
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+# Configuration
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8284891962:AAHbRY1FB23MIh4TZ8qeSh6CXQ35XKH_XjQ")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1bs_6iDuxgTX4QF_FTra3YDYVsRFatwRXLQ0tiQfNZyI")
 
-# Validate required environment variables
-required_env_vars = [
-    "BOT_TOKEN",
-    "SPREADSHEET_ID",
-    "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET", 
-    "GOOGLE_REFRESH_TOKEN",
-    "GOOGLE_PARENT_FOLDER_ID",
-    "GOOGLE_OWNER_EMAIL"
-]
-
-missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
-if missing_vars:
-    logger.error(f"❌ Missing required environment variables: {missing_vars}")
-    logger.error("❌ Please set all required environment variables before running the app")
+if not BOT_TOKEN or not SPREADSHEET_ID:
+    logger.error("❌ BOT_TOKEN dan SPREADSHEET_ID harus di-set!")
     exit(1)
 
 # Create Flask app
@@ -101,32 +88,26 @@ def initialize_bot():
         logger.error(f"❌ Error initializing bot: {e}")
         return False
 
-def test_google_connection():
-    """Test Google API connection"""
+def test_ownership_transfer():
+    """Test ownership transfer capability synchronously"""
     if not bot or not bot.google_service:
-        logger.warning("⚠️ Bot or Google service not available for connection test")
+        logger.warning("⚠️ Bot or Google service not available for ownership test")
         return False
     
     try:
-        logger.info("🧪 Testing Google API connection...")
-        test_result = bot.google_service.test_connection()
+        logger.info("🧪 Testing ownership transfer capability...")
+        test_result = bot.google_service.test_ownership_transfer()
         
         if test_result:
-            logger.info("✅ Google API connection test PASSED!")
-            logger.info(f"👤 Connected as: {test_result.get('user_email', 'Unknown')}")
-            
-            quota = test_result.get('storage_quota', {})
-            if quota:
-                usage_gb = round(int(quota.get('usage', 0)) / (1024**3), 2)
-                limit_gb = round(int(quota.get('limit', 0)) / (1024**3), 2)
-                logger.info(f"💾 Storage: {usage_gb}GB / {limit_gb}GB used")
+            logger.info("✅ Ownership transfer test PASSED - files will use personal Gmail quota!")
         else:
-            logger.warning("⚠️ Google API connection test FAILED")
+            logger.warning("⚠️ Ownership transfer test FAILED - files will use service account quota")
+            logger.warning("⚠️ This may cause upload failures due to quota limits")
         
         return test_result
         
     except Exception as e:
-        logger.error(f"❌ Error testing Google connection: {e}")
+        logger.error(f"❌ Error testing ownership transfer: {e}")
         return False
 
 @app.route('/')
@@ -143,9 +124,8 @@ def index():
         'status': 'running',
         'bot_ready': bot_ready,
         'loop_running': loop is not None and not loop.is_closed(),
-        'message': 'Telegram Bot Webhook Server - OAuth2 Version',
-        'quota_info': quota_info,
-        'authentication': 'OAuth2'
+        'message': 'Telegram Bot Webhook Server',
+        'quota_info': quota_info
     })
 
 @app.route('/health')
@@ -153,13 +133,12 @@ def health():
     return jsonify({
         'status': 'healthy' if bot_ready else 'initializing',
         'bot': 'ready' if bot_ready else 'not_ready',
-        'loop': 'running' if loop and not loop.is_closed() else 'not_running',
-        'auth_method': 'OAuth2'
+        'loop': 'running' if loop and not loop.is_closed() else 'not_running'
     })
 
-@app.route('/test-connection')
-def test_connection_endpoint():
-    """Test endpoint for Google API connection"""
+@app.route('/test-ownership')
+def test_ownership_endpoint():
+    """Test endpoint for ownership transfer"""
     try:
         if not bot or not bot.google_service:
             return jsonify({
@@ -167,17 +146,20 @@ def test_connection_endpoint():
                 'message': 'Bot or Google service not available'
             }), 503
         
-        test_result = test_google_connection()
+        test_result = test_ownership_transfer()
+        
+        # Get usage info
+        usage_info = bot.google_service.get_service_account_usage()
         
         return jsonify({
             'status': 'success' if test_result else 'failed',
-            'connection_working': bool(test_result),
-            'connection_info': test_result if test_result else None,
-            'message': 'Google API connection test completed'
+            'ownership_transfer_working': test_result,
+            'service_account_usage': usage_info,
+            'message': 'Ownership transfer test completed'
         })
         
     except Exception as e:
-        logger.error(f"❌ Error in test connection endpoint: {e}")
+        logger.error(f"❌ Error in test ownership endpoint: {e}")
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -185,7 +167,7 @@ def test_connection_endpoint():
 
 @app.route('/cleanup')
 def cleanup_endpoint():
-    """Cleanup endpoint for old temporary files"""
+    """Cleanup endpoint for service account files"""
     try:
         if not bot or not bot.google_service:
             return jsonify({
@@ -193,7 +175,7 @@ def cleanup_endpoint():
                 'message': 'Bot or Google service not available'
             }), 503
         
-        cleanup_result = bot.google_service.cleanup_old_files(days_old=7)
+        cleanup_result = bot.google_service.cleanup_service_account_files()
         
         return jsonify({
             'status': 'success' if cleanup_result else 'failed',
@@ -253,8 +235,7 @@ def webhook():
 def startup():
     global bot_ready
     
-    logger.info("🚀 Starting Telegram Bot Webhook Server - OAuth2 Version...")
-    logger.info(f"🔑 Using OAuth2 authentication for: {os.environ.get('GOOGLE_OWNER_EMAIL')}")
+    logger.info("🚀 Starting Telegram Bot Webhook Server...")
     
     # Start event loop
     logger.info("⚡ Starting event loop...")
@@ -268,16 +249,15 @@ def startup():
         logger.error("❌ Failed to initialize bot")
         exit(1)
     
-    # Test Google API connection
-    logger.info("🧪 Testing Google API connection...")
-    connection_test_passed = test_google_connection()
+    # Test ownership transfer capability
+    logger.info("🧪 Testing ownership transfer capability...")
+    ownership_test_passed = test_ownership_transfer()
     
-    if connection_test_passed:
-        logger.info("✅ GOOGLE API CONNECTION WORKING!")
-        logger.info("✅ Using OAuth2 - no quota limitations!")
+    if ownership_test_passed:
+        logger.info("✅ OWNERSHIP TRANSFER WORKING - Files will use your personal Gmail quota (15GB)!")
     else:
-        logger.warning("⚠️ GOOGLE API CONNECTION FAILED!")
-        logger.warning("⚠️ Bot may not work properly!")
+        logger.warning("⚠️ OWNERSHIP TRANSFER NOT WORKING - Files will use service account quota (limited)!")
+        logger.warning("⚠️ Uploads may fail due to quota limitations!")
     
     logger.info("✅ Application startup complete!")
 

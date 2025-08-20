@@ -1,12 +1,13 @@
-# services/google_service.py - FIXED VERSION WITH UPLOAD-TRANSFER-DELETE STRATEGY
+# services/google_service.py - FIXED VERSION WITHOUT SERVICE ACCOUNT STORAGE
 import os
 import json
 import base64
 import logging
 import time
+import io
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 from datetime import datetime
 
@@ -92,114 +93,157 @@ class GoogleService:
 
     def upload_to_drive(self, file_path, file_name, folder_id):
         """
-        NEW STRATEGY: Upload -> Move to target folder -> Delete original
-        This avoids service account storage quota issues
+        STRATEGY: Upload directly to personal drive using in-memory approach
+        This completely avoids service account storage
         """
-        temp_file_id = None
-        
         try:
-            logger.info(f"📤 Starting upload: {file_name}")
+            logger.info(f"📤 Starting memory-based upload: {file_name}")
             
-            # STEP 1: Upload file to service account's My Drive (temporary)
-            file_metadata = {
-                'name': f"temp_{int(time.time())}_{file_name}"  # Temporary name
-            }
+            # Read file into memory
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
             
-            media = MediaFileUpload(file_path, resumable=True)
+            logger.info(f"📋 File loaded into memory: {len(file_content)} bytes")
             
-            # Upload to service account's root (no parents = My Drive)
-            temp_file = self.service_drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
-            ).execute()
-            
-            temp_file_id = temp_file.get('id')
-            logger.info(f"📤 Temporary file uploaded: {temp_file_id}")
-            
-            if not temp_file_id:
-                raise Exception("Failed to get temp file ID")
-            
-            # STEP 2: Copy file to target folder with final name
-            copy_metadata = {
-                'name': file_name,
-                'parents': [folder_id]
-            }
-            
-            final_file = self.service_drive.files().copy(
-                fileId=temp_file_id,
-                body=copy_metadata,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
-            ).execute()
-            
-            final_file_id = final_file.get('id')
-            logger.info(f"📋 File copied to target folder: {final_file_id}")
-            
-            # STEP 3: Delete temporary file from service account
-            try:
-                self.service_drive.files().delete(
-                    fileId=temp_file_id,
-                    supportsAllDrives=True,
-                    supportsTeamDrives=True
-                ).execute()
-                logger.info(f"🗑️ Temporary file deleted from service account")
-            except Exception as delete_error:
-                logger.warning(f"⚠️ Could not delete temp file: {delete_error}")
-                # Don't fail the whole process for this
-            
-            logger.info(f"✅ Upload complete: {file_name} -> {final_file_id}")
-            return final_file_id
-            
-        except Exception as e:
-            logger.error(f"❌ Error in upload process: {e}")
-            
-            # Cleanup: Delete temp file if it exists
-            if temp_file_id:
-                try:
-                    self.service_drive.files().delete(
-                        fileId=temp_file_id,
-                        supportsAllDrives=True
-                    ).execute()
-                    logger.info(f"🧹 Cleaned up temp file: {temp_file_id}")
-                except:
-                    logger.warning(f"⚠️ Could not clean up temp file: {temp_file_id}")
-            
-            # Try alternative method if main method fails
-            return self._upload_alternative_method(file_path, file_name, folder_id)
-
-    def _upload_alternative_method(self, file_path, file_name, folder_id):
-        """Alternative upload method using direct folder upload"""
-        try:
-            logger.info("🔄 Trying alternative upload method...")
-            
-            # Try direct upload to target folder
+            # Create file metadata for direct upload to target folder
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
             
-            # Use smaller chunk size for better reliability
-            media = MediaFileUpload(
-                file_path, 
+            # Create media upload from memory
+            media_body = MediaIoBaseUpload(
+                io.BytesIO(file_content),
+                mimetype='image/jpeg',
                 resumable=True,
                 chunksize=1024*1024  # 1MB chunks
             )
             
+            # Upload directly to target folder
             uploaded_file = self.service_drive.files().create(
                 body=file_metadata,
-                media_body=media,
+                media_body=media_body,
                 supportsAllDrives=True,
                 supportsTeamDrives=True
             ).execute()
             
             file_id = uploaded_file.get('id')
+            
+            if file_id:
+                logger.info(f"✅ Direct upload successful: {file_name} -> {file_id}")
+                return file_id
+            else:
+                raise Exception("No file ID returned from upload")
+                
+        except HttpError as e:
+            error_details = e.error_details if hasattr(e, 'error_details') else str(e)
+            logger.error(f"❌ Google API Error during upload: {error_details}")
+            
+            # Check for specific quota error
+            if "storageQuotaExceeded" in str(e):
+                logger.error("🚨 STORAGE QUOTA EXCEEDED!")
+                logger.error("This means the target folder's owner (your personal account) is out of storage.")
+                logger.error("Solutions:")
+                logger.error("1. Free up space in your personal Google Drive")
+                logger.error("2. Upgrade your Google Drive storage plan")
+                logger.error("3. Use a different target folder with available storage")
+                return None
+                
+            # Try alternative smaller upload method
+            return self._upload_alternative_method(file_path, file_name, folder_id)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in memory-based upload: {e}")
+            return self._upload_alternative_method(file_path, file_name, folder_id)
+
+    def _upload_alternative_method(self, file_path, file_name, folder_id):
+        """Alternative method: Create empty file then update content"""
+        try:
+            logger.info("🔄 Trying alternative upload method (create then update)...")
+            
+            # Step 1: Create empty file
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            
+            empty_file = self.service_drive.files().create(
+                body=file_metadata,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
+            
+            file_id = empty_file.get('id')
+            logger.info(f"📄 Empty file created: {file_id}")
+            
+            # Step 2: Update with actual content
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+            
+            media_body = MediaIoBaseUpload(
+                io.BytesIO(file_content),
+                mimetype='image/jpeg',
+                resumable=True,
+                chunksize=512*1024  # 512KB chunks (smaller)
+            )
+            
+            updated_file = self.service_drive.files().update(
+                fileId=file_id,
+                media_body=media_body,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
+            
             logger.info(f"✅ Alternative upload successful: {file_id}")
             return file_id
             
         except Exception as alt_error:
-            logger.error(f"❌ Alternative upload failed: {alt_error}")
+            logger.error(f"❌ Alternative upload also failed: {alt_error}")
+            
+            # Try the most basic method
+            return self._upload_basic_method(file_path, file_name, folder_id)
+
+    def _upload_basic_method(self, file_path, file_name, folder_id):
+        """Most basic upload method: tiny chunks, no resumable"""
+        try:
+            logger.info("🔄 Trying basic upload method (non-resumable)...")
+            
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Check file size
+            file_size = len(file_content)
+            logger.info(f"📊 File size: {file_size} bytes")
+            
+            if file_size > 5 * 1024 * 1024:  # If > 5MB
+                logger.error("❌ File too large for basic method")
+                return None
+            
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            
+            # Non-resumable upload for small files
+            media_body = MediaIoBaseUpload(
+                io.BytesIO(file_content),
+                mimetype='image/jpeg',
+                resumable=False  # Non-resumable
+            )
+            
+            uploaded_file = self.service_drive.files().create(
+                body=file_metadata,
+                media_body=media_body,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
+            ).execute()
+            
+            file_id = uploaded_file.get('id')
+            logger.info(f"✅ Basic upload successful: {file_id}")
+            return file_id
+            
+        except Exception as basic_error:
+            logger.error(f"❌ All upload methods failed: {basic_error}")
             return None
 
     def get_folder_link(self, folder_id):
@@ -227,31 +271,38 @@ class GoogleService:
             logger.error(f"❌ Error updating spreadsheet: {e}")
             return False
 
-    def check_upload_permissions(self):
-        """Check if we can upload to the target folder"""
+    def check_target_folder_permissions(self):
+        """Check if we can write to the target folder"""
         try:
-            logger.info("🔍 Checking upload permissions...")
+            logger.info("🔍 Checking target folder permissions...")
             
-            # Test creating a small text file
-            test_content = "test file"
-            test_file_path = "test_upload.txt"
+            # Check if we can access the target folder
+            folder_info = self.service_drive.files().get(
+                fileId=self.parent_folder_id,
+                supportsAllDrives=True,
+                fields="id,name,permissions,owners"
+            ).execute()
             
-            # Create test file
-            with open(test_file_path, 'w') as f:
-                f.write(test_content)
+            logger.info(f"📁 Target folder: {folder_info.get('name')} ({folder_info.get('id')})")
             
-            # Try to upload to parent folder
-            file_metadata = {
-                'name': f"test_{int(time.time())}.txt",
-                'parents': [self.parent_folder_id] if self.parent_folder_id else []
+            # Try to create a test file directly in target folder
+            test_metadata = {
+                'name': f'test_permissions_{int(time.time())}.txt',
+                'parents': [self.parent_folder_id]
             }
             
-            media = MediaFileUpload(test_file_path)
+            test_content = "test"
+            media_body = MediaIoBaseUpload(
+                io.BytesIO(test_content.encode()),
+                mimetype='text/plain',
+                resumable=False
+            )
             
             test_file = self.service_drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                supportsAllDrives=True
+                body=test_metadata,
+                media_body=media_body,
+                supportsAllDrives=True,
+                supportsTeamDrives=True
             ).execute()
             
             test_file_id = test_file.get('id')
@@ -260,79 +311,38 @@ class GoogleService:
             if test_file_id:
                 self.service_drive.files().delete(
                     fileId=test_file_id,
-                    supportsAllDrives=True
+                    supportsAllDrives=True,
+                    supportsTeamDrives=True
                 ).execute()
-            
-            os.remove(test_file_path)
-            
-            logger.info("✅ Upload permissions confirmed")
+                
+            logger.info("✅ Target folder permissions confirmed - we can upload directly!")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Upload permission test failed: {e}")
-            
-            # Clean up test file if it exists
-            try:
-                if os.path.exists(test_file_path):
-                    os.remove(test_file_path)
-            except:
-                pass
-                
+            logger.error(f"❌ Target folder permission test failed: {e}")
             return False
 
-    def get_service_account_usage(self):
-        """Check current usage of service account"""
+    def get_drive_usage_info(self):
+        """Get drive usage information"""
         try:
-            # Get files owned by service account
-            results = self.service_drive.files().list(
-                q="'me' in owners",
-                pageSize=100,
-                fields="files(id, name, size)"
-            ).execute()
+            # Get about info
+            about = self.service_drive.about().get(fields="storageQuota,user").execute()
             
-            files = results.get('files', [])
-            total_size = sum(int(file.get('size', 0)) for file in files)
+            storage_quota = about.get('storageQuota', {})
+            user_info = about.get('user', {})
             
-            logger.info(f"📊 Service account usage: {len(files)} files, {total_size / (1024*1024):.2f} MB")
-            
-            return {
-                'file_count': len(files),
-                'total_size_mb': total_size / (1024*1024),
-                'files': files
+            usage_info = {
+                'user_email': user_info.get('emailAddress', 'Unknown'),
+                'total_gb': int(storage_quota.get('limit', 0)) / (1024**3),
+                'used_gb': int(storage_quota.get('usage', 0)) / (1024**3),
+                'available_gb': (int(storage_quota.get('limit', 0)) - int(storage_quota.get('usage', 0))) / (1024**3)
             }
             
+            logger.info(f"💾 Drive usage: {usage_info['used_gb']:.2f}GB / {usage_info['total_gb']:.2f}GB")
+            logger.info(f"💿 Available: {usage_info['available_gb']:.2f}GB")
+            
+            return usage_info
+            
         except Exception as e:
-            logger.error(f"❌ Error checking service account usage: {e}")
+            logger.error(f"❌ Error getting drive usage: {e}")
             return None
-
-    def cleanup_service_account_files(self):
-        """Clean up any remaining files in service account"""
-        try:
-            logger.info("🧹 Cleaning up service account files...")
-            
-            results = self.service_drive.files().list(
-                q="'me' in owners",
-                pageSize=100,
-                fields="files(id, name, size)"
-            ).execute()
-            
-            files = results.get('files', [])
-            
-            deleted_count = 0
-            for file in files:
-                try:
-                    self.service_drive.files().delete(
-                        fileId=file['id'],
-                        supportsAllDrives=True
-                    ).execute()
-                    deleted_count += 1
-                    logger.info(f"🗑️ Deleted: {file['name']}")
-                except Exception as delete_error:
-                    logger.warning(f"⚠️ Could not delete {file['name']}: {delete_error}")
-            
-            logger.info(f"✅ Cleanup complete: {deleted_count}/{len(files)} files deleted")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Cleanup failed: {e}")
-            return False

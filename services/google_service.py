@@ -1,4 +1,4 @@
-# services/google_service.py - FIXED VERSION WITH UPLOAD-TRANSFER-DELETE STRATEGY
+# services/google_service.py - OAuth Version with Service Account for Sheets
 import os
 import json
 import base64
@@ -6,6 +6,8 @@ import logging
 import time
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 from datetime import datetime
@@ -13,58 +15,114 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # Scopes untuk Google API
-SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive']
+SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 class GoogleService:
-    def __init__(self, parent_folder_id="12EU8I2sbhzxyHaiBhoC2xjJ4jTXpYJfY"):
-        self.service_drive = None
-        self.service_sheets = None
-        self.parent_folder_id = parent_folder_id
-        self.owner_email = "muhamadsidiq2@gmail.com"  # Your personal email
+    def __init__(self):
+        # Get environment variables with fallbacks
+        self.parent_folder_id = os.environ.get('PARENT_FOLDER_ID', '12EU8I2sbhzxyHaiBhoC2xjJ4jTXpYJfY')
+        self.owner_email = os.environ.get('OWNER_EMAIL', 'muhamadsidiq2@gmail.com')
+        
+        # OAuth credentials for Drive (photo uploads)
+        self.oauth_client_id = os.environ.get('OAUTH_CLIENT_ID')
+        self.oauth_client_secret = os.environ.get('OAUTH_CLIENT_SECRET')
+        self.oauth_refresh_token = os.environ.get('OAUTH_REFRESH_TOKEN')
+        
+        # Service account for Sheets (spreadsheet operations)
+        self.service_account_key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
+        
+        # Services
+        self.service_drive = None  # Will use OAuth
+        self.service_sheets = None  # Will use Service Account
         
     def authenticate(self):
-        """Authenticate with Google APIs using service account"""
+        """Authenticate with Google APIs using OAuth for Drive and Service Account for Sheets"""
         try:
-            # Try to load from environment variable first
-            service_account_key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
-            
-            if service_account_key:
-                try:
-                    # Decode base64 and load JSON
-                    service_account_info = json.loads(base64.b64decode(service_account_key))
-                    creds = service_account.Credentials.from_service_account_info(
-                        service_account_info,
-                        scopes=SCOPES
-                    )
-                    logger.info("✅ Using service account from environment variable")
-                except Exception as e:
-                    logger.error(f"❌ Error decoding service account from env var: {e}")
-                    return False
-            else:
-                # Load from file (fallback)
-                if os.path.exists('service-account.json'):
-                    creds = service_account.Credentials.from_service_account_file(
-                        'service-account.json',
-                        scopes=SCOPES
-                    )
-                    logger.info("✅ Using service account from file")
-                else:
-                    logger.error("❌ No service account found (neither env var nor file)")
-                    return False
-            
-            self.service_drive = build('drive', 'v3', credentials=creds)
-            self.service_sheets = build('sheets', 'v4', credentials=creds)
-            
-            logger.info(f"✅ Google APIs authenticated successfully! Owner: {self.owner_email}")
+            # 1. Authenticate Drive with OAuth (for photo uploads)
+            if not self._authenticate_drive_oauth():
+                logger.error("❌ Failed to authenticate Drive with OAuth")
+                return False
+                
+            # 2. Authenticate Sheets with Service Account (for spreadsheet operations)
+            if not self._authenticate_sheets_service_account():
+                logger.error("❌ Failed to authenticate Sheets with Service Account")
+                return False
+                
+            logger.info("✅ Both Drive (OAuth) and Sheets (Service Account) authenticated successfully!")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error authenticating with service account: {e}")
+            logger.error(f"❌ Error during authentication: {e}")
+            return False
+
+    def _authenticate_drive_oauth(self):
+        """Authenticate Drive service with OAuth credentials"""
+        try:
+            if not all([self.oauth_client_id, self.oauth_client_secret, self.oauth_refresh_token]):
+                logger.error("❌ Missing OAuth credentials for Drive")
+                logger.error("Required: OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REFRESH_TOKEN")
+                return False
+            
+            # Create OAuth credentials
+            creds = Credentials(
+                token=None,
+                refresh_token=self.oauth_refresh_token,
+                client_id=self.oauth_client_id,
+                client_secret=self.oauth_client_secret,
+                token_uri='https://oauth2.googleapis.com/token',
+                scopes=DRIVE_SCOPES
+            )
+            
+            # Refresh the token
+            creds.refresh(Request())
+            
+            # Build Drive service
+            self.service_drive = build('drive', 'v3', credentials=creds)
+            
+            logger.info("✅ Drive service authenticated with OAuth")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error authenticating Drive with OAuth: {e}")
+            return False
+
+    def _authenticate_sheets_service_account(self):
+        """Authenticate Sheets service with Service Account"""
+        try:
+            if not self.service_account_key:
+                logger.error("❌ Missing GOOGLE_SERVICE_ACCOUNT_KEY for Sheets")
+                return False
+            
+            # Decode and load service account
+            try:
+                service_account_info = json.loads(base64.b64decode(self.service_account_key))
+                creds = service_account.Credentials.from_service_account_info(
+                    service_account_info,
+                    scopes=SHEETS_SCOPES
+                )
+                logger.info("✅ Using service account from environment variable for Sheets")
+            except Exception as e:
+                logger.error(f"❌ Error decoding service account: {e}")
+                return False
+            
+            # Build Sheets service
+            self.service_sheets = build('sheets', 'v4', credentials=creds)
+            
+            logger.info("✅ Sheets service authenticated with Service Account")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error authenticating Sheets with Service Account: {e}")
             return False
 
     def create_folder(self, folder_name, parent_folder_id=None):
-        """Create folder in target drive (personal drive) directly"""
+        """Create folder using OAuth Drive service"""
         try:
+            if not self.service_drive:
+                logger.error("❌ Drive service not authenticated")
+                return None
+                
             parent_id = parent_folder_id or self.parent_folder_id
             
             # Create folder metadata
@@ -74,11 +132,10 @@ class GoogleService:
                 'parents': [parent_id] if parent_id else []
             }
             
-            # Create folder in target parent (which should be in personal drive)
+            # Create folder
             folder = self.service_drive.files().create(
                 body=folder_metadata,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
+                supportsAllDrives=True
             ).execute()
             
             folder_id = folder.get('id')
@@ -91,115 +148,41 @@ class GoogleService:
             return None
 
     def upload_to_drive(self, file_path, file_name, folder_id):
-        """
-        NEW STRATEGY: Upload -> Move to target folder -> Delete original
-        This avoids service account storage quota issues
-        """
-        temp_file_id = None
-        
+        """Upload file to Drive using OAuth credentials"""
         try:
-            logger.info(f"📤 Starting upload: {file_name}")
+            if not self.service_drive:
+                logger.error("❌ Drive service not authenticated")
+                return None
+                
+            logger.info(f"📤 Starting OAuth upload: {file_name}")
             
-            # STEP 1: Upload file to service account's My Drive (temporary)
-            file_metadata = {
-                'name': f"temp_{int(time.time())}_{file_name}"  # Temporary name
-            }
-            
-            media = MediaFileUpload(file_path, resumable=True)
-            
-            # Upload to service account's root (no parents = My Drive)
-            temp_file = self.service_drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
-            ).execute()
-            
-            temp_file_id = temp_file.get('id')
-            logger.info(f"📤 Temporary file uploaded: {temp_file_id}")
-            
-            if not temp_file_id:
-                raise Exception("Failed to get temp file ID")
-            
-            # STEP 2: Copy file to target folder with final name
-            copy_metadata = {
-                'name': file_name,
-                'parents': [folder_id]
-            }
-            
-            final_file = self.service_drive.files().copy(
-                fileId=temp_file_id,
-                body=copy_metadata,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
-            ).execute()
-            
-            final_file_id = final_file.get('id')
-            logger.info(f"📋 File copied to target folder: {final_file_id}")
-            
-            # STEP 3: Delete temporary file from service account
-            try:
-                self.service_drive.files().delete(
-                    fileId=temp_file_id,
-                    supportsAllDrives=True,
-                    supportsTeamDrives=True
-                ).execute()
-                logger.info(f"🗑️ Temporary file deleted from service account")
-            except Exception as delete_error:
-                logger.warning(f"⚠️ Could not delete temp file: {delete_error}")
-                # Don't fail the whole process for this
-            
-            logger.info(f"✅ Upload complete: {file_name} -> {final_file_id}")
-            return final_file_id
-            
-        except Exception as e:
-            logger.error(f"❌ Error in upload process: {e}")
-            
-            # Cleanup: Delete temp file if it exists
-            if temp_file_id:
-                try:
-                    self.service_drive.files().delete(
-                        fileId=temp_file_id,
-                        supportsAllDrives=True
-                    ).execute()
-                    logger.info(f"🧹 Cleaned up temp file: {temp_file_id}")
-                except:
-                    logger.warning(f"⚠️ Could not clean up temp file: {temp_file_id}")
-            
-            # Try alternative method if main method fails
-            return self._upload_alternative_method(file_path, file_name, folder_id)
-
-    def _upload_alternative_method(self, file_path, file_name, folder_id):
-        """Alternative upload method using direct folder upload"""
-        try:
-            logger.info("🔄 Trying alternative upload method...")
-            
-            # Try direct upload to target folder
+            # File metadata
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
             
-            # Use smaller chunk size for better reliability
+            # Upload with chunked upload for better reliability
             media = MediaFileUpload(
                 file_path, 
                 resumable=True,
                 chunksize=1024*1024  # 1MB chunks
             )
             
+            # Create the file
             uploaded_file = self.service_drive.files().create(
                 body=file_metadata,
                 media_body=media,
-                supportsAllDrives=True,
-                supportsTeamDrives=True
+                supportsAllDrives=True
             ).execute()
             
             file_id = uploaded_file.get('id')
-            logger.info(f"✅ Alternative upload successful: {file_id}")
+            logger.info(f"✅ OAuth upload successful: {file_name} -> {file_id}")
+            
             return file_id
             
-        except Exception as alt_error:
-            logger.error(f"❌ Alternative upload failed: {alt_error}")
+        except Exception as e:
+            logger.error(f"❌ OAuth upload failed: {e}")
             return None
 
     def get_folder_link(self, folder_id):
@@ -207,8 +190,12 @@ class GoogleService:
         return f"https://drive.google.com/drive/folders/{folder_id}"
 
     def update_spreadsheet(self, spreadsheet_id, spreadsheet_config, laporan_data):
-        """Update Google Spreadsheet with report data"""
+        """Update Google Spreadsheet using Service Account"""
         try:
+            if not self.service_sheets:
+                logger.error("❌ Sheets service not authenticated")
+                return False
+                
             row_data = spreadsheet_config.prepare_row_data(laporan_data, 0)
             
             body = {'values': [row_data]}
@@ -227,112 +214,64 @@ class GoogleService:
             logger.error(f"❌ Error updating spreadsheet: {e}")
             return False
 
-    def check_upload_permissions(self):
-        """Check if we can upload to the target folder"""
+    def test_oauth_drive_access(self):
+        """Test if OAuth Drive access is working"""
         try:
-            logger.info("🔍 Checking upload permissions...")
+            if not self.service_drive:
+                logger.error("❌ Drive service not available")
+                return False
             
-            # Test creating a small text file
-            test_content = "test file"
-            test_file_path = "test_upload.txt"
-            
-            # Create test file
-            with open(test_file_path, 'w') as f:
-                f.write(test_content)
-            
-            # Try to upload to parent folder
-            file_metadata = {
-                'name': f"test_{int(time.time())}.txt",
-                'parents': [self.parent_folder_id] if self.parent_folder_id else []
-            }
-            
-            media = MediaFileUpload(test_file_path)
-            
-            test_file = self.service_drive.files().create(
-                body=file_metadata,
-                media_body=media,
+            # Try to get information about the parent folder
+            folder_info = self.service_drive.files().get(
+                fileId=self.parent_folder_id,
                 supportsAllDrives=True
             ).execute()
             
-            test_file_id = test_file.get('id')
-            
-            # Clean up test file
-            if test_file_id:
-                self.service_drive.files().delete(
-                    fileId=test_file_id,
-                    supportsAllDrives=True
-                ).execute()
-            
-            os.remove(test_file_path)
-            
-            logger.info("✅ Upload permissions confirmed")
+            logger.info(f"✅ OAuth Drive access confirmed - Parent folder: {folder_info.get('name')}")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Upload permission test failed: {e}")
-            
-            # Clean up test file if it exists
-            try:
-                if os.path.exists(test_file_path):
-                    os.remove(test_file_path)
-            except:
-                pass
-                
+            logger.error(f"❌ OAuth Drive access test failed: {e}")
             return False
 
-    def get_service_account_usage(self):
-        """Check current usage of service account"""
+    def get_drive_quota_info(self):
+        """Get Drive quota information using OAuth"""
         try:
-            # Get files owned by service account
-            results = self.service_drive.files().list(
-                q="'me' in owners",
-                pageSize=100,
-                fields="files(id, name, size)"
+            if not self.service_drive:
+                return None
+                
+            about = self.service_drive.about().get(
+                fields='storageQuota,user'
             ).execute()
             
-            files = results.get('files', [])
-            total_size = sum(int(file.get('size', 0)) for file in files)
+            storage_quota = about.get('storageQuota', {})
+            user_info = about.get('user', {})
             
-            logger.info(f"📊 Service account usage: {len(files)} files, {total_size / (1024*1024):.2f} MB")
-            
-            return {
-                'file_count': len(files),
-                'total_size_mb': total_size / (1024*1024),
-                'files': files
+            quota_info = {
+                'user_email': user_info.get('emailAddress', 'Unknown'),
+                'total_gb': int(storage_quota.get('limit', 0)) / (1024**3),
+                'used_gb': int(storage_quota.get('usage', 0)) / (1024**3),
+                'used_drive_gb': int(storage_quota.get('usageInDrive', 0)) / (1024**3)
             }
             
+            quota_info['available_gb'] = quota_info['total_gb'] - quota_info['used_gb']
+            
+            logger.info(f"📊 Drive quota: {quota_info['used_gb']:.2f}GB / {quota_info['total_gb']:.2f}GB used")
+            
+            return quota_info
+            
         except Exception as e:
-            logger.error(f"❌ Error checking service account usage: {e}")
+            logger.error(f"❌ Error getting quota info: {e}")
             return None
 
     def cleanup_service_account_files(self):
-        """Clean up any remaining files in service account"""
-        try:
-            logger.info("🧹 Cleaning up service account files...")
-            
-            results = self.service_drive.files().list(
-                q="'me' in owners",
-                pageSize=100,
-                fields="files(id, name, size)"
-            ).execute()
-            
-            files = results.get('files', [])
-            
-            deleted_count = 0
-            for file in files:
-                try:
-                    self.service_drive.files().delete(
-                        fileId=file['id'],
-                        supportsAllDrives=True
-                    ).execute()
-                    deleted_count += 1
-                    logger.info(f"🗑️ Deleted: {file['name']}")
-                except Exception as delete_error:
-                    logger.warning(f"⚠️ Could not delete {file['name']}: {delete_error}")
-            
-            logger.info(f"✅ Cleanup complete: {deleted_count}/{len(files)} files deleted")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Cleanup failed: {e}")
-            return False
+        """This method is no longer needed since we're using OAuth for Drive"""
+        logger.info("ℹ️ Cleanup not needed - using OAuth for Drive uploads")
+        return True
+
+    def get_service_account_usage(self):
+        """Get minimal service account info (only for sheets)"""
+        return {
+            'note': 'Service account only used for spreadsheet operations',
+            'drive_uploads': 'Using OAuth personal account'
+        }

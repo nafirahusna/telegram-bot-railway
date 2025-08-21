@@ -490,7 +490,7 @@ class TelegramBot:
                 ]
                 
                 await update.message.reply_text(
-                    f"📷 **Total foto terupload: {len(session.get('photos', [])))}**\n\n"
+                    f"📷 **Total foto terupload: {len(session.get('photos', []))}**\n\n"
                     f"Kirimkan foto berikutnya atau pilih opsi:",
                     reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
                 )

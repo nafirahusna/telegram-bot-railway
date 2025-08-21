@@ -569,6 +569,28 @@ class TelegramBot:
                     photo_info = "\n📷 Foto Eviden: Belum ada foto terupload\n"
                 
                 confirmation_text = (
+                    f"✅ Konfirmasi Data Laporan\n\n"
+                    f"Report Type: {session['data']['report_type']}\n"
+                    f"ID Ticket: {session['data']['id_ticket']}\n"
+                    f"Customer Name: {session['data']['customer_name']}\n"
+                    f"Service No: {session['data']['service_no']}\n"
+                    f"Segment: {session['data']['segment']}\n"
+                    f"Teknisi 1: {session['data']['teknisi_1']}\n"
+                    f"Teknisi 2: {session['data']['teknisi_2']}\n"
+                    f"STO: {session['data']['sto']}\n"
+                    f"Valins ID: {session['data']['valins_id']}"
+                    f"{photo_info}\n"
+                    f"Pilih tindakan:"
+                )
+                
+                keyboard = [
+                    [KeyboardButton("✅ Kirim Laporan"), KeyboardButton("📝 Edit Data")],
+                    [KeyboardButton("📷 Upload Foto Eviden"), KeyboardButton("❌ Batalkan")]
+                ]
+                reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                
+                await update.message.reply_text(confirmation_text, reply_markup=reply_markup)
+                return CONFIRM_DATA
         
         # Handle pilihan awal dan navigasi
         if message_text == "🔙 Kembali ke Konfirmasi":

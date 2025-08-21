@@ -549,7 +549,7 @@ class TelegramBot:
                     
                     await update.message.reply_text(
                         "📝 Masukkan deskripsi untuk foto ini (akan digunakan sebagai nama file):\n\n"
-                        "Contoh: 'foto_sebelum_perbaikan', 'hasil_instalasi', dll",
+                        "Contoh: 'foto sebelum perbaikan', 'hasil instalasi', dll",
                         reply_markup=ReplyKeyboardMarkup([
                             [KeyboardButton("❌ Batalkan")]
                         ], resize_keyboard=True)

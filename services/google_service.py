@@ -20,9 +20,9 @@ SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 class GoogleService:
     def __init__(self):
-        # Get environment variables with fallbacks
-        self.parent_folder_id = os.environ.get('PARENT_FOLDER_ID', '12EU8I2sbhzxyHaiBhoC2xjJ4jTXpYJfY')
-        self.owner_email = os.environ.get('OWNER_EMAIL', 'ilhambintang9773@gmail.com')
+        # Get environment variables - HAPUS HARDCODED VALUES
+        self.parent_folder_id = os.environ.get('PARENT_FOLDER_ID')  # Hapus default value
+        self.owner_email = os.environ.get('OWNER_EMAIL')  # Hapus default value
         
         # OAuth credentials for Drive (photo uploads)
         self.oauth_client_id = os.environ.get('OAUTH_CLIENT_ID')
@@ -32,9 +32,34 @@ class GoogleService:
         # Service account for Sheets (spreadsheet operations)
         self.service_account_key = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
         
+        # Validate required environment variables
+        self._validate_environment_variables()
+        
         # Services
         self.service_drive = None  # Will use OAuth
         self.service_sheets = None  # Will use Service Account
+
+    def _validate_environment_variables(self):
+        """Validate that all required environment variables are set"""
+        required_vars = {
+            'PARENT_FOLDER_ID': self.parent_folder_id,
+            'OWNER_EMAIL': self.owner_email,
+            'OAUTH_CLIENT_ID': self.oauth_client_id,
+            'OAUTH_CLIENT_SECRET': self.oauth_client_secret,
+            'OAUTH_REFRESH_TOKEN': self.oauth_refresh_token,
+            'GOOGLE_SERVICE_ACCOUNT_KEY': self.service_account_key
+        }
+        
+        missing_vars = [var for var, value in required_vars.items() if not value]
+        
+        if missing_vars:
+            logger.error(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
+            logger.error("Please set all required environment variables:")
+            for var in missing_vars:
+                logger.error(f"  - {var}")
+            raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
+        
+        logger.info("✅ All required environment variables are set")
         
     def authenticate(self):
         """Authenticate with Google APIs using OAuth for Drive and Service Account for Sheets"""

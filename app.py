@@ -133,6 +133,10 @@ def index():
         'bot_ready': bot_ready,
         'loop_running': loop is not None and not loop.is_closed(),
         'message': 'Telegram Bot with OAuth Drive & Service Account Sheets',
+        'spreadsheet_config': {
+            'spreadsheet_id': SPREADSHEET_ID,
+            'sheet_name': SHEET_NAME
+        },
         'services': {
             'drive': 'oauth_personal_account',
             'sheets': 'service_account'

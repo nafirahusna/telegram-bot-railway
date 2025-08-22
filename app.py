@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Configuration from environment variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+SHEET_NAME = os.environ.get("SHEET_NAME", "Sheet1")  # Default to Sheet1 if not set
 
 # Validate required environment variables
 if not BOT_TOKEN:
@@ -27,6 +28,16 @@ if not BOT_TOKEN:
 if not SPREADSHEET_ID:
     logger.error("❌ SPREADSHEET_ID environment variable is required!")
     exit(1)
+
+# Log sheet configuration
+logger.info(f"📊 Using spreadsheet: {SPREADSHEET_ID}")
+logger.info(f"📄 Using sheet: {SHEET_NAME}")
+
+# Optional: Validate SHEET_NAME format (tidak boleh kosong atau hanya whitespace)
+if not SHEET_NAME or not SHEET_NAME.strip():
+    logger.warning("⚠️ SHEET_NAME is empty, using default 'Sheet1'")
+    SHEET_NAME = "Sheet1"
+    os.environ["SHEET_NAME"] = SHEET_NAME
 
 # Create Flask app
 app = Flask(__name__)

@@ -50,6 +50,11 @@ class GoogleService:
             'GOOGLE_SERVICE_ACCOUNT_KEY': self.service_account_key
         }
         
+        # Optional vars with defaults
+        optional_vars = {
+            'SHEET_NAME': os.environ.get('SHEET_NAME', 'Sheet1')
+        }
+        
         missing_vars = [var for var, value in required_vars.items() if not value]
         
         if missing_vars:
@@ -59,7 +64,15 @@ class GoogleService:
                 logger.error(f"  - {var}")
             raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
         
+        # Log configuration
         logger.info("✅ All required environment variables are set")
+        logger.info(f"📄 Sheet name: {optional_vars['SHEET_NAME']}")
+        
+        # Validate sheet name format
+        sheet_name = optional_vars['SHEET_NAME']
+        if not sheet_name or not sheet_name.strip():
+            logger.warning("⚠️ Invalid sheet name, using 'Sheet1' as fallback")
+            os.environ['SHEET_NAME'] = 'Sheet1'
         
     def authenticate(self):
         """Authenticate with Google APIs using OAuth for Drive and Service Account for Sheets"""

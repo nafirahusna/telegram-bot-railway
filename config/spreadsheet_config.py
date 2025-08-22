@@ -4,7 +4,7 @@ from datetime import datetime
 class SpreadsheetConfig:
     def __init__(self):
         # Konfigurasi posisi tabel
-        self.table_start_row = 4      # Baris mulai (3 = baris ketiga)
+        self.table_start_row = 3      # Baris mulai (3 = baris ketiga)
         self.table_start_col = "A"    # Kolom mulai 
         self.table_end_col = "U"      # Kolom terakhir (21 kolom: A-U)
 

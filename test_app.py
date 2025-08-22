@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 # Configuration
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8284891962:AAHbRY1FB23MIh4TZ8qeSh6CXQ35XKH_XjQ")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1bs_6iDuxgTX4QF_FTra3YDYVsRFatwRXLQ0tiQfNZyI")
+SHEET_NAME = os.environ.get("SHEET_NAME", "Sheet1")  # Default sheet name
+
+logger.info(f"📊 Test Configuration:")
+logger.info(f"  - Spreadsheet ID: {SPREADSHEET_ID}")
+logger.info(f"  - Sheet Name: {SHEET_NAME}")
+logger.info(f"  - Bot Token: {'SET' if BOT_TOKEN else 'NOT_SET'}")")
 
 # Create Flask app
 app = Flask(__name__)
